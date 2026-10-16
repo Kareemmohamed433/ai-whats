@@ -1,8 +1,9 @@
+
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL 
-    ? `${import.meta.env.VITE_API_URL}/api` 
+  baseURL: import.meta.env.VITE_API_URL
+    ? `${import.meta.env.VITE_API_URL}/api`
     : '/api',
   headers: {
     'Content-Type': 'application/json'
@@ -29,10 +30,12 @@ api.interceptors.response.use(
       localStorage.removeItem('khams_token');
       localStorage.removeItem('khams_user');
     }
+
     const errorData = error.response?.data?.error || {
       code: 'NETWORK_ERROR',
       message: 'تعذر الاتصال بالسيرفر. يرجى التحقق من اتصال الإنترنت.'
     };
+
     return Promise.reject(errorData);
   }
 );
