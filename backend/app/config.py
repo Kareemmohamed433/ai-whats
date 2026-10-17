@@ -137,6 +137,24 @@ class Config:
     )
 
     # =========================
+    # Facebook Messenger (Page) API
+    # =========================
+    MESSENGER_PAGE_ACCESS_TOKEN = os.getenv(
+        "MESSENGER_PAGE_ACCESS_TOKEN",
+        ""
+    )
+
+    MESSENGER_VERIFY_TOKEN = os.getenv(
+        "MESSENGER_VERIFY_TOKEN",
+        ""
+    )
+
+    MESSENGER_PAGE_ID = os.getenv(
+        "MESSENGER_PAGE_ID",
+        ""
+    )
+
+    # =========================
     # TikTok Business Messaging API
     # =========================
     TIKTOK_ACCESS_TOKEN = os.getenv(
