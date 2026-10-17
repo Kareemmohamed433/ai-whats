@@ -20,4 +20,5 @@ EXPOSE 5000
 ENV FLASK_APP=run.py
 ENV PYTHONUNBUFFERED=1
 
-CMD ["gunicorn", "--worker-class", "eventlet", "-w", "1", "--bind", "0.0.0.0:5000", "run:app"]
+# Shell form so ${PORT} (provided by Railway) is expanded
+CMD gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:${PORT:-5000} --timeout 120 run:app
