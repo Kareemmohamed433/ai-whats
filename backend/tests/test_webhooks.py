@@ -4,8 +4,7 @@ from app.extensions import db
 
 @pytest.fixture
 def app():
-    app = create_app()
-    app.config.update({
+    app = create_app(test_config={
         "TESTING": True,
         "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:"
     })

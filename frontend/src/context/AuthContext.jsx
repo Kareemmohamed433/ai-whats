@@ -5,10 +5,10 @@ const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem('khams_user');
+    const saved = localStorage.getItem('nexora_user') || localStorage.getItem('khams_user');
     return saved ? JSON.parse(saved) : null;
   });
-  const [token, setToken] = useState(() => localStorage.getItem('khams_token') || null);
+  const [token, setToken] = useState(() => localStorage.getItem('nexora_token') || localStorage.getItem('khams_token') || null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -17,7 +17,7 @@ export const AuthProvider = ({ children }) => {
         .then(res => {
           if (res.success) {
             setUser(res.user);
-            localStorage.setItem('khams_user', JSON.stringify(res.user));
+            localStorage.setItem('nexora_user', JSON.stringify(res.user));
           }
         })
         .catch(() => {
@@ -34,11 +34,11 @@ export const AuthProvider = ({ children }) => {
     if (res.success) {
       setToken(res.token);
       setUser(res.user);
-      localStorage.setItem('khams_token', res.token);
-      localStorage.setItem('khams_user', JSON.stringify(res.user));
+      localStorage.setItem('nexora_token', res.token);
+      localStorage.setItem('nexora_user', JSON.stringify(res.user));
       return res.user;
     }
-    throw new Error(res.error?.message || 'فشل الدخول');
+    throw new Error(res.error?.message || 'فشل تسجيل الدخول');
   };
 
   const logout = () => {
@@ -47,6 +47,8 @@ export const AuthProvider = ({ children }) => {
     }
     setToken(null);
     setUser(null);
+    localStorage.removeItem('nexora_token');
+    localStorage.removeItem('nexora_user');
     localStorage.removeItem('khams_token');
     localStorage.removeItem('khams_user');
   };

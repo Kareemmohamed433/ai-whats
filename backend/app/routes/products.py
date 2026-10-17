@@ -9,11 +9,11 @@ products_bp = Blueprint('products', __name__, url_prefix='/api/products')
 def get_products():
     category = request.args.get('category')
     search = request.args.get('search', '').strip()
-    active_only = request.args.get('active_only', 'false').lower() == 'true'
+    include_inactive = request.args.get('include_inactive', 'false').lower() == 'true'
 
     query = Product.query
 
-    if active_only:
+    if not include_inactive:
         query = query.filter_by(is_active=True)
 
     if category:

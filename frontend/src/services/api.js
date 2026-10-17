@@ -13,7 +13,7 @@ const api = axios.create({
 // Request Interceptor: Attach JWT Token
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('khams_token');
+    const token = localStorage.getItem('nexora_token') || localStorage.getItem('khams_token') || localStorage.getItem('token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -27,8 +27,11 @@ api.interceptors.response.use(
   (response) => response.data,
   (error) => {
     if (error.response && error.response.status === 401) {
+      localStorage.removeItem('nexora_token');
+      localStorage.removeItem('nexora_user');
       localStorage.removeItem('khams_token');
       localStorage.removeItem('khams_user');
+      localStorage.removeItem('token');
     }
 
     const errorData = error.response?.data?.error || {

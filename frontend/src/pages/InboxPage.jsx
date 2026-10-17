@@ -577,7 +577,7 @@ export default function InboxPage() {
                   className={`flex flex-col ${isCustomer ? 'items-start' : 'items-end'}`}
                 >
                   <div className="flex items-center gap-1.5 mb-1 text-[10px] text-slate-400">
-                    <span>{isCustomer ? (selectedConv.customer?.name || 'عميل') : isAi ? '🤖 خام سينا AI' : `👤 ${m.sender_name || 'موظف الدعم'}`}</span>
+                    <span>{isCustomer ? (selectedConv.customer?.name || 'عميل') : isAi ? '🤖 NEXORA AI' : `👤 ${m.sender_name || 'موظف الدعم'}`}</span>
                     <span>•</span>
                     <span>{new Date(m.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</span>
                     <button onClick={() => handleTogglePin(m.id)} className="hover:text-amber-500 p-0.5">

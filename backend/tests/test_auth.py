@@ -5,15 +5,14 @@ from app.models import User
 
 @pytest.fixture
 def app():
-    app = create_app()
-    app.config.update({
+    app = create_app(test_config={
         "TESTING": True,
         "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:"
     })
 
     with app.app_context():
         db.create_all()
-        user = User(email="testadmin@khams-sinaa.eg", name="Test Admin", role="admin")
+        user = User(email="admin@nexorasolutions.com", name="NEXORA Admin", role="admin")
         user.set_password("password123")
         db.session.add(user)
         db.session.commit()
@@ -29,7 +28,7 @@ def client(app):
 
 def test_login_success(client):
     res = client.post('/api/auth/login', json={
-        "email": "testadmin@khams-sinaa.eg",
+        "email": "admin@nexorasolutions.com",
         "password": "password123"
     })
     assert res.status_code == 200
@@ -39,9 +38,10 @@ def test_login_success(client):
 
 def test_login_failure(client):
     res = client.post('/api/auth/login', json={
-        "email": "testadmin@khams-sinaa.eg",
+        "email": "admin@nexorasolutions.com",
         "password": "wrongpassword"
     })
     assert res.status_code == 401
     data = res.get_json()
     assert data["success"] is False
+

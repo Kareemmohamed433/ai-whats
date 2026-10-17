@@ -55,7 +55,7 @@ export default function AnalyticsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold text-slate-900 dark:text-white">التحليلات والتقارير الإحصائية (Analytics)</h2>
-          <p className="text-xs text-slate-500">تقارير أداء الذكاء الاصطناعي، معدل استجابة الموظفين، وتوزيع منصات خام سينا</p>
+          <p className="text-xs text-slate-500">تقارير أداء الذكاء الاصطناعي، معدل استجابة المهندسين، وتوزيع قنوات خدمة عملاء NEXORA</p>
         </div>
         <button
           onClick={() => fetchAnalytics(false)}

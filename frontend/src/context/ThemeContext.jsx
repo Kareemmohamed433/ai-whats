@@ -4,7 +4,7 @@ const ThemeContext = createContext();
 
 export const ThemeProvider = ({ children }) => {
   const [isDark, setIsDark] = useState(() => {
-    const saved = localStorage.getItem('khams_theme');
+    const saved = localStorage.getItem('nexora_theme') || localStorage.getItem('khams_theme');
     if (saved) return saved === 'dark';
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
@@ -13,10 +13,10 @@ export const ThemeProvider = ({ children }) => {
     const root = document.documentElement;
     if (isDark) {
       root.classList.add('dark');
-      localStorage.setItem('khams_theme', 'dark');
+      localStorage.setItem('nexora_theme', 'dark');
     } else {
       root.classList.remove('dark');
-      localStorage.setItem('khams_theme', 'light');
+      localStorage.setItem('nexora_theme', 'light');
     }
   }, [isDark]);
 

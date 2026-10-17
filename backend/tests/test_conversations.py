@@ -5,15 +5,14 @@ from app.models import User, Customer, Conversation
 
 @pytest.fixture
 def app():
-    app = create_app()
-    app.config.update({
+    app = create_app(test_config={
         "TESTING": True,
         "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:"
     })
 
     with app.app_context():
         db.create_all()
-        user = User(email="agent@khams-sinaa.eg", name="Agent", role="agent")
+        user = User(email="agent1@nexorasolutions.com", name="Agent", role="agent")
         user.set_password("password123")
         db.session.add(user)
 

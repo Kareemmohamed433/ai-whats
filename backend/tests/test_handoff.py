@@ -9,8 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 @pytest.fixture
 def app():
-    app = create_app()
-    app.config.update({
+    app = create_app(test_config={
         "TESTING": True,
         "SQLALCHEMY_DATABASE_URI": "sqlite://",
         "SQLALCHEMY_ENGINE_OPTIONS": {
@@ -22,7 +21,7 @@ def app():
     with app.app_context():
         db.create_all()
 
-        agent = User(email="agent@khams-sinaa.eg", name="Agent", role="agent")
+        agent = User(email="agent1@nexorasolutions.com", name="NEXORA Agent", role="agent")
         agent.set_password("password123")
         db.session.add(agent)
 
@@ -55,7 +54,7 @@ def test_normal_ai_response(app):
             platform="whatsapp",
             platform_user_id="+201009988776",
             customer_name="Test Customer",
-            content="السلام عليكم، عندكم زيت زيتون 1 لتر؟"
+            content="السلام عليكم، بتعملوا مواقع إلكترونية وشات بوت؟"
         )
         assert conv.conversation_status == "open"
         assert conv.ai_status == "active"
@@ -106,18 +105,18 @@ def test_agent_reply(app, client):
         conv_id = conv.id
 
     # Agent logs in & replies
-    login_res = client.post('/api/auth/login', json={"email": "agent@khams-sinaa.eg", "password": "password123"})
+    login_res = client.post('/api/auth/login', json={"email": "agent1@nexorasolutions.com", "password": "password123"})
     token = login_res.get_json()["token"]
 
     reply_res = client.post('/api/messages', json={
         "conversation_id": conv_id,
-        "content": "أهلاً بك، معك موظف الدعم كيف يمكنني مساعدتك؟"
+        "content": "أهلاً بك، معك مهندس الدعم من NEXORA كيف يمكنني مساعدتك؟"
     }, headers={"Authorization": f"Bearer {token}"})
 
     assert reply_res.status_code == 201
     
     with app.app_context():
-        conv_after = Conversation.query.get(conv_id)
+        conv_after = db.session.get(Conversation, conv_id)
         assert conv_after.ai_status == "human_handled"
 
 # Test 4 — Human Re-enables AI
@@ -132,7 +131,7 @@ def test_human_reenables_ai(app, client):
         db.session.commit()
         conv_id = conv.id
 
-    login_res = client.post('/api/auth/login', json={"email": "agent@khams-sinaa.eg", "password": "password123"})
+    login_res = client.post('/api/auth/login', json={"email": "agent1@nexorasolutions.com", "password": "password123"})
     token = login_res.get_json()["token"]
 
     # Click 🤖 تفعيل AI
@@ -142,7 +141,7 @@ def test_human_reenables_ai(app, client):
     assert res.status_code == 200
 
     with app.app_context():
-        conv_after = Conversation.query.get(conv_id)
+        conv_after = db.session.get(Conversation, conv_id)
         assert conv_after.ai_status == "active"
         assert conv_after.conversation_status == "open"
 
@@ -151,7 +150,7 @@ def test_human_reenables_ai(app, client):
             platform="whatsapp",
             platform_user_id="+201004040404",
             customer_name="Reenable Cust",
-            content="بكم أسعار زيت الزيتون؟"
+            content="عايز أعرف تفاصيل باقات تطوير المواقع وتكلفتها؟"
         )
         msgs = Message.query.filter_by(conversation_id=conv_id).all()
         assert msgs[-1].sender_type == "ai"
@@ -168,7 +167,7 @@ def test_close_and_reactivate_ai(app, client):
         db.session.commit()
         conv_id = conv.id
 
-    login_res = client.post('/api/auth/login', json={"email": "agent@khams-sinaa.eg", "password": "password123"})
+    login_res = client.post('/api/auth/login', json={"email": "agent1@nexorasolutions.com", "password": "password123"})
     token = login_res.get_json()["token"]
 
     # Agent clicks: إغلاق المحادثة وإعادة تفعيل AI
@@ -179,7 +178,7 @@ def test_close_and_reactivate_ai(app, client):
     assert res.status_code == 200
 
     with app.app_context():
-        conv_after = Conversation.query.get(conv_id)
+        conv_after = db.session.get(Conversation, conv_id)
         assert conv_after.conversation_status == "closed"
         assert conv_after.ai_status == "active"
 
@@ -188,9 +187,9 @@ def test_close_and_reactivate_ai(app, client):
             platform="whatsapp",
             platform_user_id="+201005050505",
             customer_name="Close & Reactivate Cust",
-            content="السلام عليكم، عايز أعرف سعر الـ2 لتر."
+            content="السلام عليكم، هل باقة Starter تشمل الدومين والاستضافة؟"
         )
-        conv_reopened = Conversation.query.get(conv_id)
+        conv_reopened = db.session.get(Conversation, conv_id)
         assert conv_reopened.conversation_status == "open"
         assert conv_reopened.ai_status == "active"
         msgs = Message.query.filter_by(conversation_id=conv_id).all()
@@ -208,7 +207,7 @@ def test_close_without_reactivating_ai(app, client):
         db.session.commit()
         conv_id = conv.id
 
-    login_res = client.post('/api/auth/login', json={"email": "agent@khams-sinaa.eg", "password": "password123"})
+    login_res = client.post('/api/auth/login', json={"email": "agent1@nexorasolutions.com", "password": "password123"})
     token = login_res.get_json()["token"]
 
     # Agent clicks: إغلاق المحادثة (only close, keep human_handled)
@@ -218,7 +217,7 @@ def test_close_without_reactivating_ai(app, client):
     assert res.status_code == 200
 
     with app.app_context():
-        conv_after = Conversation.query.get(conv_id)
+        conv_after = db.session.get(Conversation, conv_id)
         assert conv_after.conversation_status == "closed"
         assert conv_after.ai_status == "human_handled"
 
@@ -227,9 +226,9 @@ def test_close_without_reactivating_ai(app, client):
             platform="whatsapp",
             platform_user_id="+201006060606",
             customer_name="Close Only Cust",
-            content="ممكن متابعة شحنتي؟"
+            content="ممكن متابعة حالة مشروعي والتنفيذ؟"
         )
-        conv_reopened = Conversation.query.get(conv_id)
+        conv_reopened = db.session.get(Conversation, conv_id)
         assert conv_reopened.conversation_status == "open"
         assert conv_reopened.ai_status == "human_handled"
         msgs = Message.query.filter_by(conversation_id=conv_id).all()
@@ -253,3 +252,4 @@ def test_race_condition_protection(app):
         # Call generate_response
         reply = AIService.generate_response(conv.id, "السلام عليكم")
         assert reply is None # AI response blocked by Race Condition Guard!
+

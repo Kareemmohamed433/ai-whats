@@ -3,10 +3,10 @@ version: '3.8'
 services:
   postgres:
     image: postgres:15-alpine
-    container_name: khams_sinaa_postgres
+    container_name: nexora_postgres
     restart: always
     environment:
-      POSTGRES_DB: khams_sinaa_db
+      POSTGRES_DB: nexora_db
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgrespassword2026
     ports:
@@ -18,21 +18,23 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: khams_sinaa_backend
+    container_name: nexora_backend
     restart: always
     ports:
       - "5000:5000"
     environment:
-      - DATABASE_URL=postgresql://postgres:postgrespassword2026@postgres:5432/khams_sinaa_db
-      - SECRET_KEY=khams-sinaa-super-secret-key-change-this-in-production-2026
-      - JWT_SECRET_KEY=khams-sinaa-jwt-secret-key-change-this-in-production-2026
+      - DATABASE_URL=postgresql://postgres:postgrespassword2026@postgres:5432/nexora_db
+      - SECRET_KEY=nexora-super-secret-key-change-this-in-production-2026
+      - JWT_SECRET_KEY=nexora-jwt-secret-key-change-this-in-production-2026
+      - NEXORA_PORTFOLIO_URL=https://company-pi-two.vercel.app/
       - AI_API_KEY=${AI_API_KEY}
-      - AI_API_BASE_URL=${AI_API_BASE_URL:-https://api.openai.com/v1}
-      - AI_MODEL=${AI_MODEL:-gpt-4o-mini}
+      - AI_API_BASE_URL=${AI_API_BASE_URL:-https://api.groq.com/openai/v1}
+      - AI_MODEL=${AI_MODEL:-llama-3.3-70b-versatile}
       - WHATSAPP_ACCESS_TOKEN=${WHATSAPP_ACCESS_TOKEN}
       - WHATSAPP_PHONE_NUMBER_ID=${WHATSAPP_PHONE_NUMBER_ID}
-      - WHATSAPP_VERIFY_TOKEN=${WHATSAPP_VERIFY_TOKEN:-khams_sinaa_verify_token_2026}
+      - WHATSAPP_VERIFY_TOKEN=${WHATSAPP_VERIFY_TOKEN:-nexora_verify_token_2026}
       - INSTAGRAM_ACCESS_TOKEN=${INSTAGRAM_ACCESS_TOKEN}
+      - INSTAGRAM_VERIFY_TOKEN=${INSTAGRAM_VERIFY_TOKEN:-nexora_instagram_verify_2026}
       - TIKTOK_ACCESS_TOKEN=${TIKTOK_ACCESS_TOKEN}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
     depends_on:
@@ -42,7 +44,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: khams_sinaa_frontend
+    container_name: nexora_frontend
     restart: always
     ports:
       - "80:80"

@@ -9,7 +9,9 @@ from app.models.product import Product, Category
 from app.models.order import Order, OrderItem
 from app.models.knowledge import KnowledgeBaseArticle, FAQ
 from app.models.integration import Integration
-from app.models.settings import StoreSettings, AISettings
+from app.models.settings import CompanySettings, StoreSettings, AISettings
+from app.models.service_package import ServicePackage
+from app.models.lead import Lead
 
 __all__ = [
     'User',
@@ -35,6 +37,9 @@ __all__ = [
     'KnowledgeBaseArticle',
     'FAQ',
     'Integration',
+    'CompanySettings',
     'StoreSettings',
-    'AISettings'
+    'AISettings',
+    'ServicePackage',
+    'Lead'
 ]

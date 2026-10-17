@@ -81,7 +81,7 @@ def handle_telegram_webhook():
                 if hasattr(TelegramService, 'get_file_url'):
                     media_url = TelegramService.get_file_url(file_id)
                 if not text:
-                    text = "صورة إثبات الدفع"
+                    text = "صورة مرفقة عبر تيليجرام"
 
             _process_incoming_message(
                 platform='telegram',
@@ -200,7 +200,7 @@ def _process_incoming_message(platform, platform_user_id, customer_name, phone=N
                 name=customer_name,
                 phone=phone,
                 email=email,
-                avatar=f"https://ui-avatars.com/api/?name={customer_name.replace(' ', '+')}&background=059669&color=fff"
+                avatar=f"https://ui-avatars.com/api/?name={customer_name.replace(' ', '+')}&background=1E6BFF&color=fff"
             )
             db.session.add(customer)
             db.session.flush()

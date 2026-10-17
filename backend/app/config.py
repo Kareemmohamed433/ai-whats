@@ -11,16 +11,35 @@ load_dotenv()
 class Config:
 
     # =========================
-    # General
+    # NEXORA Company Identity & Public References
+    # =========================
+    COMPANY_NAME = "NEXORA Software Solutions"
+    COMPANY_TAGLINE = "Ideas → Code → Impact"
+    COMPANY_PHONE = "+201556441133"
+    COMPANY_EMAIL = "contact@nexorasolutions.com"
+    COMPANY_ADDRESS = "القاهرة، مصر"
+    NEXORA_PORTFOLIO_URL = os.getenv(
+        "NEXORA_PORTFOLIO_URL",
+        "https://company-pi-two.vercel.app/"
+    )
+    NEXORA_FACEBOOK_URL = "https://www.facebook.com/profile.php?id=61595024167397"
+    NEXORA_INSTAGRAM_URL = "https://www.instagram.com/nexorasoftwarre/"
+    TELEGRAM_SERVICE_URL = os.getenv(
+        "TELEGRAM_SERVICE_URL",
+        "https://ai-whats-production.up.railway.app/"
+    )
+
+    # =========================
+    # General & Security
     # =========================
     SECRET_KEY = os.getenv(
         "SECRET_KEY",
-        "khams-sinaa-secret-key-super-secure-2026"
+        "nexora-secret-key-super-secure-production-2026"
     )
 
     JWT_SECRET_KEY = os.getenv(
         "JWT_SECRET_KEY",
-        "khams-sinaa-jwt-secret-key-2026"
+        "nexora-jwt-secret-key-production-2026"
     )
 
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(days=7)
@@ -49,18 +68,18 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     # =========================
-    # AI
+    # AI Provider Configuration
     # =========================
     AI_API_KEY = os.getenv("AI_API_KEY", "")
 
     AI_API_BASE_URL = os.getenv(
         "AI_API_BASE_URL",
-        "https://api.openai.com/v1"
+        "https://api.groq.com/openai/v1"
     )
 
     AI_MODEL = os.getenv(
         "AI_MODEL",
-        "gpt-4o-mini"
+        "llama-3.3-70b-versatile"
     )
 
     AI_TEMPERATURE = float(
@@ -72,7 +91,7 @@ class Config:
     )
 
     # =========================
-    # WhatsApp
+    # WhatsApp Business Cloud API
     # =========================
     WHATSAPP_ACCESS_TOKEN = os.getenv(
         "WHATSAPP_ACCESS_TOKEN",
@@ -86,7 +105,7 @@ class Config:
 
     WHATSAPP_VERIFY_TOKEN = os.getenv(
         "WHATSAPP_VERIFY_TOKEN",
-        "khams_sinaa_verify_token_2026"
+        "nexora_verify_token_2026"
     )
 
     WHATSAPP_BUSINESS_ACCOUNT_ID = os.getenv(
@@ -95,20 +114,18 @@ class Config:
     )
 
     # =========================
-    # Instagram
+    # Instagram Direct Graph API
     # =========================
     INSTAGRAM_ACCESS_TOKEN = os.getenv(
         "INSTAGRAM_ACCESS_TOKEN",
         ""
     )
 
-    # Instagram Webhook verification token
     INSTAGRAM_VERIFY_TOKEN = os.getenv(
         "INSTAGRAM_VERIFY_TOKEN",
-        "khams_sinaa_instagram_verify_2026"
+        "nexora_instagram_verify_2026"
     )
 
-    # Instagram Business Account ID
     INSTAGRAM_ACCOUNT_ID = os.getenv(
         "INSTAGRAM_ACCOUNT_ID",
         "17841422010205813"
@@ -120,7 +137,7 @@ class Config:
     )
 
     # =========================
-    # TikTok
+    # TikTok Business Messaging API
     # =========================
     TIKTOK_ACCESS_TOKEN = os.getenv(
         "TIKTOK_ACCESS_TOKEN",
@@ -133,7 +150,7 @@ class Config:
     )
 
     # =========================
-    # Telegram
+    # Telegram Bot API
     # =========================
     TELEGRAM_BOT_TOKEN = os.getenv(
         "TELEGRAM_BOT_TOKEN",
@@ -141,7 +158,7 @@ class Config:
     )
 
     # =========================
-    # Frontend
+    # Frontend Application URL
     # =========================
     FRONTEND_URL = os.getenv(
         "FRONTEND_URL",

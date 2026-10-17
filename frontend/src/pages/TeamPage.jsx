@@ -264,7 +264,7 @@ export default function TeamPage() {
       {showModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 w-full max-w-md shadow-2xl space-y-4">
-            <h3 className="font-bold text-base text-slate-900 dark:text-white">إضافة عضو جديد لفريق خام سينا</h3>
+            <h3 className="font-bold text-base text-slate-900 dark:text-white">إضافة عضو جديد لفريق NEXORA</h3>
             <form onSubmit={handleCreateUser} className="space-y-3 text-xs">
               <div>
                 <label className="block font-semibold mb-1">الاسم الكامل</label>
