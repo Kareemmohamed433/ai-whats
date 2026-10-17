@@ -206,6 +206,36 @@ cd C:\Users\Andalus\Desktop\ai-zait\backend
 
 ---
 
+## 🔔 Web Push (VAPID) & iPhone PWA Setup
+
+NEXORA includes native Web Push Notifications (RFC 8292) supporting desktop browsers and iPhones running **iOS 16.4+**.
+
+### 1. Generating VAPID Keys
+To generate a compliant VAPID keypair:
+```powershell
+.\venv\Scripts\python.exe generate_vapid_keys.py
+```
+Copy the generated values to your `.env` file:
+```env
+VAPID_PUBLIC_KEY=BKS2unBwvA_pXKtcQoVH7Ql7J6tQ7k6957TyeqZ0Q_k_LThHobxryq6nBec0MAZ868S_pwFCGcZbHbzXAJWC9Ig
+VAPID_PRIVATE_KEY=xGN3v39NwEHJgQ8I6lSBZMN39NACyL1JrelYKri1x7k
+VAPID_CLAIM_EMAIL=mailto:contact@nexorasolutions.com
+```
+
+### 2. iPhone (iOS 16.4+) Acceptance Testing Procedure
+1. Open the deployed HTTPS URL in **Safari** on your iPhone.
+2. Tap the **Share (مشاركة)** button at the bottom of Safari.
+3. Select **Add to Home Screen (إضافة إلى الصفحة الرئيسية)**.
+4. Launch the installed **NEXORA** web app from your iPhone Home Screen (running in standalone mode).
+5. Log in to your account and navigate to **الإعدادات (Settings) -> إشعارات Web Push**.
+6. Tap **تفعيل الإشعارات على هذا الجهاز (Enable Notifications)**.
+7. Allow notifications when prompted by iOS.
+8. Tap **إرسال إشعار تجريبي (Send Test Push)** to verify that lockscreen and banner notifications arrive.
+9. Send a message to your connected WhatsApp Business or Telegram bot; the incoming message will trigger an immediate push notification.
+10. Tapping the push notification will navigate directly to the relevant conversation in the mobile inbox.
+
+---
+
 ## 🔄 Database Migration & Rollback Procedures
 
 ### Performing Migrations
@@ -227,4 +257,4 @@ If a rollback is required in SQLite development:
 ---
 
 ## 📄 License
-Production-ready software custom-built for **NEXORA Software Solutions** (Ideas → Code → Impact). All rights reserved 2026.
+Production-ready software custom-built for **NEXORA Software Solutions** (Ideas → Code → Impact). All rights reserved 2026.

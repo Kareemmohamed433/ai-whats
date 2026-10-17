@@ -12,6 +12,9 @@ from app.models.integration import Integration
 from app.models.settings import CompanySettings, StoreSettings, AISettings
 from app.models.service_package import ServicePackage
 from app.models.lead import Lead
+from app.models.push_subscription import PushSubscription
+from app.models.notification_preference import NotificationPreference
+from app.models.notification_event import NotificationEvent
 
 __all__ = [
     'User',
@@ -41,5 +44,8 @@ __all__ = [
     'StoreSettings',
     'AISettings',
     'ServicePackage',
-    'Lead'
+    'Lead',
+    'PushSubscription',
+    'NotificationPreference',
+    'NotificationEvent'
 ]

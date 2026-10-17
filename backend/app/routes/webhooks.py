@@ -3,7 +3,7 @@ from flask import Blueprint, request, jsonify
 from app.models import Conversation, Customer, CustomerIdentity, Message, CustomerActivity, ConversationAuditLog
 from app.extensions import db
 from app.config import Config
-from app.services import AIService, WhatsAppService, TelegramService, InstagramService, SocketService
+from app.services import AIService, WhatsAppService, TelegramService, InstagramService, SocketService, NotificationService
 from app.services.messenger_service import MessengerService
 
 try:
@@ -384,6 +384,9 @@ def _process_incoming_message(platform, platform_user_id, customer_name, phone=N
     # Broadcast to dashboard in real-time
     SocketService.broadcast_new_message(cust_msg)
     SocketService.broadcast_conversation_update(conv)
+
+    # Dispatch Web Push and browser notifications to authorized staff
+    NotificationService.dispatch_new_message_notification(cust_msg, conv, customer)
 
     # 4. AI Service Pipeline (Requirement #8, #9, #11, #12, #16)
     if conv.ai_status == 'active':

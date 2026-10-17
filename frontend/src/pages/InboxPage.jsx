@@ -1,37 +1,46 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import { socket } from '../services/socket';
 import { useAuth } from '../context/AuthContext';
-import { 
-  Search, 
-  Send, 
-  Paperclip, 
-  Bot, 
-  UserCheck, 
-  CheckCircle2, 
-  XCircle,
-  Play,
-  UserX,
+import { playNotificationChime } from '../services/notificationService';
+import {
+  Search,
+  Send,
+  Bot,
+  UserCheck,
   Sparkles,
   RefreshCw,
   Pin,
-  CreditCard,
-  Zap,
-  User,
   Clock,
   ShoppingBag,
-  DollarSign,
   FileText,
   Activity,
   ChevronRight,
   ChevronLeft,
   AlertTriangle,
-  Smile,
-  ShieldAlert
+  X,
+  Phone,
+  MessageSquare,
+  ShieldCheck,
+  Check,
+  CheckCheck
 } from 'lucide-react';
+
+// Safe helpers: the backend may return objects where the UI expects strings/arrays
+const toArray = (v) => (Array.isArray(v) ? v : []);
+const toText = (v) => {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string' || typeof v === 'number') return String(v);
+  if (typeof v === 'object') return v.response_text || v.content || v.title || v.name || v.text || '';
+  return String(v);
+};
 
 export default function InboxPage() {
   const { user: currentUser } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const targetConvIdFromUrl = searchParams.get('conversationId');
+
   const [conversations, setConversations] = useState([]);
   const [selectedConv, setSelectedConv] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -39,15 +48,21 @@ export default function InboxPage() {
   const [quickReplies, setQuickReplies] = useState([]);
   const [suggestedReplies, setSuggestedReplies] = useState([]);
 
-  // Filters (Requirement #17)
-  const [filter, setFilter] = useState('all'); // all, unread, ai, human, human_requests, pending_payments, open, closed
-  const [platformFilter, setPlatformFilter] = useState(''); // whatsapp, instagram, telegram, tiktok
+  // Mobile View state: 'list' (conversation list) or 'chat' (active chat thread)
+  const [mobileView, setMobileView] = useState('list');
+
+  // Drafts per conversation ID (Preserves message drafts during navigation)
+  const [drafts, setDrafts] = useState({});
+
+  // Filters
+  const [filter, setFilter] = useState('all');
+  const [platformFilter, setPlatformFilter] = useState('');
   const [search, setSearch] = useState('');
 
   // UI state
   const [inputText, setInputText] = useState('');
   const [showShortcutMenu, setShowShortcutMenu] = useState(false);
-  const [showCustomer360, setShowCustomer360] = useState(true);
+  const [showCustomer360, setShowCustomer360] = useState(false); // Mobile drawer / desktop panel
   const [customer360Data, setCustomer360Data] = useState(null);
   const [newNoteText, setNewNoteText] = useState('');
   const [agents, setAgents] = useState([]);
@@ -55,123 +70,142 @@ export default function InboxPage() {
   const [sending, setSending] = useState(false);
 
   const messagesEndRef = useRef(null);
-  const token = localStorage.getItem('token');
+  const chatScrollRef = useRef(null);
 
-  // Audio chime notification (Requirement #19)
-  const playNotificationSound = () => {
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5 note
-      gain.gain.setValueAtTime(0.1, ctx.currentTime);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.2);
-    } catch (e) {
-      console.log("Audio play suppressed:", e);
-    }
-  };
+  // Latest-value refs (avoid stale closures in async callbacks / socket handlers)
+  const selectedConvRef = useRef(null);
+  const inputTextRef = useRef('');
+  const draftsRef = useRef({});
+  const urlConvHandledRef = useRef(false);
+  selectedConvRef.current = selectedConv;
+  inputTextRef.current = inputText;
+  draftsRef.current = drafts;
 
   useEffect(() => {
     api.get('/users').then(res => {
-      if (res.success) setAgents(res.users);
-    }).catch(() => {});
+      if (res.success) setAgents(toArray(res.users));
+    }).catch(() => { });
 
     fetchQuickReplies();
+
+    // Listen for Service Worker navigation events
+    const handleSwMessage = (event) => {
+      if (event.data && event.data.type === 'SELECT_CONVERSATION') {
+        loadConversationDetail(event.data.conversationId);
+        setMobileView('chat');
+      }
+    };
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+      return () => navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+    }
   }, []);
 
   const fetchQuickReplies = async () => {
     try {
       const res = await api.get('/quick-replies');
-      if (res.success) setQuickReplies(res.quick_replies || []);
-    } catch (err) {}
+      if (res.success) setQuickReplies(toArray(res.quick_replies));
+    } catch (err) { }
   };
 
-  const loadConversations = () => {
+  const loadConversations = useCallback(() => {
     let url = `/conversations?filter=${filter}&search=${encodeURIComponent(search)}`;
     if (platformFilter) url += `&platform=${platformFilter}`;
 
     api.get(url).then(res => {
-      if (res.success) {
-        setConversations(res.conversations);
-        if (!selectedConv && res.conversations.length > 0) {
-          loadConversationDetail(res.conversations[0].id);
+      if (res && res.success) {
+        const list = toArray(res.conversations);
+        setConversations(list);
+
+        // Auto-select conversation from URL param (only once, not on every refresh)
+        if (targetConvIdFromUrl && !urlConvHandledRef.current) {
+          const matched = list.find(c => String(c.id) === String(targetConvIdFromUrl));
+          if (matched) {
+            urlConvHandledRef.current = true;
+            loadConversationDetail(matched.id);
+            setMobileView('chat');
+            return;
+          }
+        }
+
+        // On desktop, auto-select first conversation if none selected
+        if (!selectedConvRef.current && list.length > 0 && window.innerWidth >= 768) {
+          loadConversationDetail(list[0].id);
         }
       }
     }).catch(err => console.error(err))
       .finally(() => setLoadingConvs(false));
-  };
+  }, [filter, platformFilter, search, targetConvIdFromUrl]);
 
   useEffect(() => {
     loadConversations();
-  }, [filter, platformFilter, search]);
+  }, [loadConversations]);
+
+  // Keep a ref to the latest loadConversations for socket handlers
+  const loadConversationsRef = useRef(loadConversations);
+  loadConversationsRef.current = loadConversations;
 
   const loadConversationDetail = (id) => {
     api.get(`/conversations/${id}`).then(res => {
-      if (res.success) {
+      if (res && res.success && res.conversation) {
+        // Save draft of the previously selected conversation
+        const prev = selectedConvRef.current;
+        const nextDrafts = { ...draftsRef.current };
+        if (prev && prev.id !== res.conversation.id) {
+          nextDrafts[prev.id] = inputTextRef.current;
+          setDrafts(nextDrafts);
+        }
+
         setSelectedConv(res.conversation);
-        setMessages(res.conversation.messages || []);
+        setMessages(toArray(res.conversation.messages));
         loadPinnedMessages(id);
         loadCustomer360(res.conversation.customer_id);
         loadSuggestedReplies(id);
+
+        // Restore draft for the newly selected conversation
+        setInputText(nextDrafts[res.conversation.id] || '');
       }
     }).catch(err => console.error(err));
   };
 
   const loadPinnedMessages = (convId) => {
     api.get(`/conversations/${convId}/pinned`).then(res => {
-      if (res.success) setPinnedMessages(res.pinned_messages || []);
-    }).catch(() => {});
+      if (res.success) setPinnedMessages(toArray(res.pinned_messages));
+    }).catch(() => { });
   };
 
   const loadCustomer360 = (customerId) => {
     if (!customerId) return;
     api.get(`/customers/${customerId}`).then(res => {
       if (res.success) setCustomer360Data(res.customer);
-    }).catch(() => {});
+    }).catch(() => { });
   };
 
   const loadSuggestedReplies = (convId) => {
     api.get(`/quick-replies/suggested?conversation_id=${convId}`).then(res => {
-      if (res.success) setSuggestedReplies(res.suggested || []);
-    }).catch(() => {});
+      if (res.success) setSuggestedReplies(toArray(res.suggested));
+    }).catch(() => { });
   };
 
-  // Real-time Socket.IO Listeners (Requirement #18)
+  // Real-time Socket.IO Listeners
   useEffect(() => {
     const handleNewMessage = (data) => {
-      if (selectedConv && data.conversation_id === selectedConv.id) {
+      if (selectedConv && data && data.message && data.conversation_id === selectedConv.id) {
         setMessages(prev => {
           if (prev.some(m => m.id === data.message.id)) return prev;
           return [...prev, data.message];
         });
       }
-      loadConversations();
+      loadConversationsRef.current();
     };
 
     const handleHumanHandoff = (data) => {
-      playNotificationSound();
-      if (Notification.permission === 'granted') {
-        new Notification("🚨 طلب دعم بشري جديد (Human Request)", {
-          body: `العميل في المحادثة #${data.conversation_id} طلب التحدث مع موظف خدمة العملاء.`
-        });
-      }
-      loadConversations();
-    };
-
-    const handlePaymentReviewCreated = (data) => {
-      playNotificationSound();
-      if (Notification.permission === 'granted') {
-        new Notification("💳 إثبات دفع جديد (Payment Review)", {
-          body: `وصل إثبات دفع جديد بانتظار المراجعة للعميل ${data.payment_review?.customer_name || ''}.`
-        });
-      }
-      loadConversations();
+      playNotificationChime();
+      loadConversationsRef.current();
     };
 
     const handleConversationUpdated = (data) => {
+      if (!data || !data.conversation) return;
       if (selectedConv && data.conversation.id === selectedConv.id) {
         setSelectedConv(prev => ({ ...prev, ...data.conversation }));
       }
@@ -179,10 +213,10 @@ export default function InboxPage() {
     };
 
     const handleStatusChanged = (data) => {
-      if (selectedConv && data.conversation_id === selectedConv.id) {
+      if (selectedConv && data.conversation_id === selectedConv.id && data.conversation) {
         setSelectedConv(prev => ({ ...prev, ...data.conversation }));
       }
-      loadConversations();
+      loadConversationsRef.current();
     };
 
     socket.on('new_message', handleNewMessage);
@@ -191,7 +225,6 @@ export default function InboxPage() {
     socket.on('conversation_status_changed', handleStatusChanged);
     socket.on('ai_status_changed', handleStatusChanged);
     socket.on('human_handoff', handleHumanHandoff);
-    socket.on('payment_review_created', handlePaymentReviewCreated);
 
     return () => {
       socket.off('new_message', handleNewMessage);
@@ -200,96 +233,89 @@ export default function InboxPage() {
       socket.off('conversation_status_changed', handleStatusChanged);
       socket.off('ai_status_changed', handleStatusChanged);
       socket.off('human_handoff', handleHumanHandoff);
-      socket.off('payment_review_created', handlePaymentReviewCreated);
     };
   }, [selectedConv]);
 
+  // Scroll to bottom when new messages arrive without jumping view
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Actions: Send Agent Message (Requirement #4)
+  // Send human message
   const handleSendMessage = (e) => {
     e?.preventDefault();
     if (!inputText.trim() || !selectedConv || sending) return;
 
+    const messageText = inputText.trim();
     setSending(true);
+
     api.post('/messages', {
       conversation_id: selectedConv.id,
-      content: inputText
+      content: messageText
     }).then(res => {
       if (res.success) {
-        setMessages(prev => {
-          if (prev.some(m => m.id === res.message.id)) return prev;
-          return [...prev, res.message];
-        });
+        setMessages(prev => (res.message && !prev.some(m => m.id === res.message.id) ? [...prev, res.message] : prev));
         setInputText('');
-        setShowShortcutMenu(false);
+        // Clear saved draft for this conversation
+        setDrafts(prev => {
+          const copy = { ...prev };
+          delete copy[selectedConv.id];
+          return copy;
+        });
       }
-    }).catch(err => alert("حدث خطأ أثناء إرسال الرسالة"))
-      .finally(() => setSending(false));
+    }).catch(err => {
+      alert(err.message || 'فشل إرسال الرسالة');
+    }).finally(() => {
+      setSending(false);
+    });
   };
 
-  // Actions: Conversation Status Updates (Requirement #5 & #14)
+  // Status updates: Human handoff, AI reactivation, Close
   const handleStatusUpdate = (newConvStatus, newAiStatus) => {
     if (!selectedConv) return;
-    const body = {};
-    if (newConvStatus) body.conversation_status = newConvStatus;
-    if (newAiStatus) body.ai_status = newAiStatus;
-
-    api.put(`/conversations/${selectedConv.id}/status`, body).then(res => {
+    api.put(`/conversations/${selectedConv.id}/status`, {
+      conversation_status: newConvStatus,
+      ai_status: newAiStatus
+    }).then(res => {
       if (res.success) {
-        setSelectedConv(res.conversation);
+        setSelectedConv(prev => ({ ...prev, ...res.conversation }));
         loadConversations();
       }
-    }).catch(() => alert("تحديث حالة المحادثة فشل"));
+    }).catch(err => alert(err.message || 'فشل تحديث الحالة'));
   };
 
-  // Assign Agent (Requirement #26)
   const handleAssignAgent = (agentId) => {
     if (!selectedConv) return;
-    api.put(`/conversations/${selectedConv.id}/assign`, { assigned_agent_id: agentId }).then(res => {
+    api.put(`/conversations/${selectedConv.id}/assign`, {
+      agent_id: agentId || null
+    }).then(res => {
       if (res.success) {
-        setSelectedConv(res.conversation);
+        setSelectedConv(prev => ({ ...prev, assigned_agent_id: agentId }));
         loadConversations();
       }
-    });
+    }).catch(err => alert(err.message || 'فشل تعيين الموظف'));
   };
 
-  // Pin / Unpin Message (Requirement #20)
-  const handleTogglePin = (messageId) => {
-    if (!selectedConv) return;
-    api.post(`/conversations/${selectedConv.id}/pin`, { message_id: messageId }).then(res => {
-      if (res.success) {
-        loadPinnedMessages(selectedConv.id);
-      }
-    });
-  };
-
-  // Add Customer Note (Requirement #2 & #28)
   const handleAddNote = (e) => {
     e.preventDefault();
-    if (!newNoteText.trim() || !selectedConv?.customer_id) return;
-    api.post(`/customers/${selectedConv.customer_id}/notes`, { note_text: newNoteText }).then(res => {
+    if (!newNoteText.trim() || !customer360Data) return;
+    api.post(`/customers/${customer360Data.id}/notes`, {
+      note_text: newNoteText
+    }).then(res => {
       if (res.success) {
         setNewNoteText('');
-        loadCustomer360(selectedConv.customer_id);
+        loadCustomer360(customer360Data.id);
       }
-    });
+    }).catch(err => alert(err.message || 'فشل حفظ الملاحظة'));
   };
 
-  // Composer Quick Reply Selection (Requirement #2 & #26)
-  const handleSelectQuickReply = (text) => {
-    const agentName = currentUser?.name || 'موظف الدعم';
-    const customerName = selectedConv?.customer?.name || 'العميل';
-    const processed = text.replace(/\{\{agent_name\}\}/g, agentName).replace(/\{\{customer_name\}\}/g, customerName);
-    setInputText(processed);
-    setShowShortcutMenu(false);
-  };
-
+  // Quick reply input handling
   const handleInputChange = (e) => {
     const val = e.target.value;
     setInputText(val);
+    if (selectedConv) {
+      setDrafts(prev => ({ ...prev, [selectedConv.id]: val }));
+    }
     if (val.startsWith('/')) {
       setShowShortcutMenu(true);
     } else {
@@ -297,56 +323,85 @@ export default function InboxPage() {
     }
   };
 
+  const handleSelectQuickReply = (text) => {
+    setInputText(text);
+    if (selectedConv) {
+      setDrafts(prev => ({ ...prev, [selectedConv.id]: text }));
+    }
+    setShowShortcutMenu(false);
+  };
+
+  // Channel badge helper
+  const getChannelBadge = (platform) => {
+    const badges = {
+      whatsapp: { label: 'واتساب', color: 'bg-emerald-500 text-white' },
+      telegram: { label: 'تيليجرام', color: 'bg-sky-500 text-white' },
+      instagram: { label: 'إنستغرام', color: 'bg-pink-600 text-white' },
+      messenger: { label: 'ماسنجر', color: 'bg-blue-600 text-white' },
+      tiktok: { label: 'تيك توك', color: 'bg-slate-900 text-white' }
+    };
+    return badges[platform] || { label: platform, color: 'bg-slate-700 text-white' };
+  };
+
   return (
-    <div className="h-[calc(100vh-6rem)] flex bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
-      {/* 1. LEFT SIDEBAR: Unified Inbox List */}
-      <div className="w-80 md:w-96 border-l border-slate-200 dark:border-slate-800 flex flex-col h-full bg-slate-50/50 dark:bg-slate-900/50">
-        
-        {/* Search & Header */}
+    <div className="flex-1 flex h-full w-full bg-white dark:bg-slate-900 rounded-none md:rounded-2xl border-0 md:border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden relative">
+
+      {/* ======================================================== */}
+      {/* 1. CONVERSATION LIST (Full-width on Mobile if list view)  */}
+      {/* ======================================================== */}
+      <div className={`
+        ${mobileView === 'list' ? 'flex' : 'hidden md:flex'}
+        w-full md:w-80 lg:w-96 flex-col h-full bg-slate-50/70 dark:bg-slate-900/70 border-l border-slate-200 dark:border-slate-800 shrink-0
+      `}>
+        {/* Top Header & Search */}
         <div className="p-3.5 border-b border-slate-200 dark:border-slate-800 space-y-2.5">
           <div className="flex items-center justify-between">
-            <h2 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-1.5">
+            <h2 className="font-extrabold text-sm text-slate-900 dark:text-white flex items-center gap-2">
+              <MessageSquare className="w-4 h-4 text-blue-600 dark:text-cyan-400" />
               <span>صندوق المحادثات</span>
-              <span className="text-[10px] bg-teal-100 dark:bg-teal-950 text-teal-600 dark:text-teal-400 font-extrabold px-2 py-0.5 rounded-full">
+              <span className="text-[10px] bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 font-extrabold px-2 py-0.5 rounded-full">
                 {conversations.length}
               </span>
             </h2>
-            <button onClick={loadConversations} className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-white">
-              <RefreshCw className={`w-3.5 h-3.5 ${loadingConvs ? 'animate-spin' : ''}`} />
+            <button
+              onClick={loadConversations}
+              aria-label="تحديث المحادثات"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-slate-800 transition"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loadingConvs ? 'animate-spin text-blue-600' : ''}`} />
             </button>
           </div>
 
+          {/* Search Input */}
           <div className="relative">
-            <Search className="w-3.5 h-3.5 absolute right-3 top-2.5 text-slate-400" />
+            <Search className="w-4 h-4 absolute right-3 top-2.5 text-slate-400" />
             <input
               type="text"
-              placeholder="بحث باسم العميل، الهاتف، المعرف..."
+              placeholder="بحث بالاسم، الهاتف، المنصة..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pr-8 pl-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-hidden focus:border-teal-500"
+              className="w-full pr-9 pl-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-hidden focus:border-blue-500 transition"
             />
           </div>
 
-          {/* Filter Tabs (Requirement #17) */}
-          <div className="flex items-center gap-1 overflow-x-auto pb-1 text-[11px] font-semibold text-slate-500">
+          {/* Filter Chips */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-[11px] font-semibold no-scrollbar">
             {[
               { id: 'all', name: 'الكل' },
               { id: 'unread', name: 'غير مقروء' },
               { id: 'human_requests', name: '🚨 طلب موظف' },
-              { id: 'pending_payments', name: '💳 دفعات معلقة' },
-              { id: 'ai', name: '🤖 AI' },
-              { id: 'human', name: '👤 موظف' },
+              { id: 'ai', name: '🤖 AI نشط' },
+              { id: 'human', name: '👤 مستلم بشرياً' },
               { id: 'open', name: 'مفتوحة' },
               { id: 'closed', name: 'مغلقة' }
             ].map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setFilter(tab.id)}
-                className={`px-2.5 py-1 rounded-lg transition whitespace-nowrap ${
-                  filter === tab.id
-                    ? 'bg-teal-600 text-white font-bold'
-                    : 'bg-white dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-400'
-                }`}
+                className={`px-2.5 py-1 rounded-lg transition whitespace-nowrap text-xs font-bold ${filter === tab.id
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'bg-white dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-400'
+                  }`}
               >
                 {tab.name}
               </button>
@@ -354,22 +409,21 @@ export default function InboxPage() {
           </div>
 
           {/* Platform Filters */}
-          <div className="flex items-center gap-1 overflow-x-auto text-[10px]">
+          <div className="flex items-center gap-1.5 overflow-x-auto text-[10px] no-scrollbar">
             {[
               { id: '', name: 'جميع القنوات' },
               { id: 'whatsapp', name: 'WhatsApp' },
               { id: 'telegram', name: 'Telegram' },
               { id: 'instagram', name: 'Instagram' },
-              { id: 'tiktok', name: 'TikTok' }
+              { id: 'messenger', name: 'Messenger' }
             ].map(p => (
               <button
                 key={p.id}
                 onClick={() => setPlatformFilter(p.id)}
-                className={`px-2 py-0.5 rounded-md transition whitespace-nowrap ${
-                  platformFilter === p.id
-                    ? 'bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900 font-bold'
-                    : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
-                }`}
+                className={`px-2 py-0.5 rounded-md transition whitespace-nowrap font-medium ${platformFilter === p.id
+                  ? 'bg-slate-800 dark:bg-slate-200 text-white dark:text-slate-900 font-bold'
+                  : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'
+                  }`}
               >
                 {p.name}
               </button>
@@ -377,38 +431,46 @@ export default function InboxPage() {
           </div>
         </div>
 
-        {/* Conversations List */}
+        {/* Conversation Cards List */}
         <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/60">
           {loadingConvs ? (
-            <div className="flex items-center justify-center py-12">
-              <div className="w-6 h-6 border-2 border-teal-500 border-t-transparent rounded-full animate-spin"></div>
+            <div className="flex flex-col items-center justify-center py-16 space-y-3">
+              <div className="w-7 h-7 border-3 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+              <p className="text-xs text-slate-400 font-medium">جاري تحميل المحادثات...</p>
             </div>
           ) : conversations.length === 0 ? (
-            <div className="text-center py-12 text-slate-400 text-xs">لا توجد محادثات مطابقة للفلاتر</div>
+            <div className="text-center py-16 text-slate-400 text-xs space-y-1">
+              <p className="font-bold">لا توجد محادثات مطابقة للفلاتر</p>
+              <p className="text-[11px] opacity-75">ستظهر المحادثات الجديدة فور إرسال العملاء رسائل.</p>
+            </div>
           ) : (
             conversations.map((conv) => {
               const isSelected = selectedConv?.id === conv.id;
-              const customerName = conv.customer?.name || 'عميل';
-              const lastMsgText = conv.last_message?.content || 'بدء المحادثة';
+              const customerName = toText(conv.customer?.name) || 'عميل جديد';
+              const lastMsgText = toText(conv.last_message) || 'بدء المحادثة';
+              const badge = getChannelBadge(conv.platform);
+              const hasDraft = !!drafts[conv.id];
 
               return (
                 <div
                   key={conv.id}
-                  onClick={() => loadConversationDetail(conv.id)}
-                  className={`p-3.5 cursor-pointer transition flex items-start gap-3 relative ${
-                    isSelected
-                      ? 'bg-teal-500/10 dark:bg-teal-950/40 border-r-4 border-teal-600'
-                      : 'hover:bg-slate-100/60 dark:hover:bg-slate-800/50'
-                  }`}
+                  onClick={() => {
+                    loadConversationDetail(conv.id);
+                    setMobileView('chat');
+                  }}
+                  className={`p-3 sm:p-3.5 cursor-pointer transition flex items-start gap-3 relative select-none ${isSelected
+                    ? 'bg-blue-500/10 dark:bg-blue-950/40 border-r-4 border-blue-600'
+                    : 'hover:bg-slate-100/70 dark:hover:bg-slate-800/50'
+                    }`}
                 >
-                  <div className="relative">
+                  <div className="relative shrink-0">
                     <img
-                      src={conv.customer?.avatar || `https://ui-avatars.com/api/?name=${customerName}`}
+                      src={conv.customer?.avatar || `https://ui-avatars.com/api/?name=${customerName}&background=1E6BFF&color=fff`}
                       alt={customerName}
-                      className="w-10 h-10 rounded-full object-cover border border-slate-200 dark:border-slate-700"
+                      className="w-11 h-11 rounded-full object-cover border border-slate-200 dark:border-slate-700 shadow-xs"
                     />
-                    <span className="absolute -bottom-1 -right-1 text-[10px] px-1 py-0.2 rounded-full font-bold bg-slate-900 text-white capitalize border border-white dark:border-slate-900">
-                      {conv.platform[0]?.toUpperCase()}
+                    <span className={`absolute -bottom-1 -right-1 text-[9px] px-1.5 py-0.2 rounded-full font-bold shadow-xs ${badge.color}`}>
+                      {badge.label}
                     </span>
                   </div>
 
@@ -417,37 +479,29 @@ export default function InboxPage() {
                       <h4 className="font-bold text-xs text-slate-900 dark:text-white truncate">
                         {customerName}
                       </h4>
-                      <span className="text-[10px] text-slate-400">
+                      <span className="text-[10px] text-slate-400 shrink-0 font-mono">
                         {conv.last_message_at ? new Date(conv.last_message_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : ''}
                       </span>
                     </div>
 
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate leading-relaxed">
+                      {hasDraft ? <span className="text-amber-500 font-bold ml-1">[مسودة]</span> : null}
                       {lastMsgText}
                     </p>
 
-                    {/* Status Badges (Requirement #11) */}
-                    <div className="flex items-center gap-1.5 pt-1 flex-wrap">
-                      <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-md ${
-                        conv.ai_status === 'active'
-                          ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400'
-                          : conv.ai_status === 'human_handled'
+                    {/* Status Tags */}
+                    <div className="flex items-center gap-1.5 pt-0.5 flex-wrap">
+                      <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded-md ${conv.ai_status === 'active'
+                        ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400'
+                        : conv.ai_status === 'human_handled'
                           ? 'bg-amber-100 dark:bg-amber-950 text-amber-600 dark:text-amber-400'
                           : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
-                      }`}>
-                        {conv.ai_status === 'active' ? '🟢 AI Active' : conv.ai_status === 'human_handled' ? '🟠 Human Handled' : '⚪ AI Disabled'}
-                      </span>
-
-                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-md ${
-                        conv.conversation_status === 'open'
-                          ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400'
-                          : 'bg-slate-100 dark:bg-slate-800 text-slate-400'
-                      }`}>
-                        {conv.conversation_status === 'open' ? 'Open' : 'Closed'}
+                        }`}>
+                        {conv.ai_status === 'active' ? '🤖 AI نشط' : conv.ai_status === 'human_handled' ? '👤 موظف' : '⚪ معطل'}
                       </span>
 
                       {conv.requires_human && (
-                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400 flex items-center gap-0.5">
+                        <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded-md bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400 flex items-center gap-0.5 animate-pulse">
                           <AlertTriangle className="w-2.5 h-2.5" /> طلب موظف
                         </span>
                       )}
@@ -455,7 +509,7 @@ export default function InboxPage() {
                   </div>
 
                   {conv.unread_count > 0 && (
-                    <span className="w-5 h-5 rounded-full bg-teal-600 text-white font-bold text-[10px] flex items-center justify-center">
+                    <span className="w-5 h-5 rounded-full bg-blue-600 text-white font-extrabold text-[10px] flex items-center justify-center shrink-0 shadow-xs">
                       {conv.unread_count}
                     </span>
                   )}
@@ -466,33 +520,48 @@ export default function InboxPage() {
         </div>
       </div>
 
-      {/* 2. CENTER AREA: Conversation View & Composer */}
+      {/* ======================================================== */}
+      {/* 2. ACTIVE CHAT THREAD (Full-width on Mobile in chat view) */}
+      {/* ======================================================== */}
       {selectedConv ? (
-        <div className="flex-1 flex flex-col h-full bg-white dark:bg-slate-900 min-w-0">
-          
-          {/* Header & Controls (Requirement #5 & #14) */}
-          <div className="p-3.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 bg-slate-50/50 dark:bg-slate-900/50">
-            <div className="flex items-center gap-3">
+        <div className={`
+          ${mobileView === 'chat' ? 'flex' : 'hidden md:flex'}
+          flex-1 flex-col h-full bg-white dark:bg-slate-900 min-w-0 overflow-hidden relative
+        `}>
+
+          {/* Mobile & Desktop Header */}
+          <div className="p-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 bg-slate-50/80 dark:bg-slate-900/80 backdrop-blur-md shrink-0">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              {/* Mobile Back Button: Returns to Conversation List View */}
+              <button
+                onClick={() => setMobileView('list')}
+                className="md:hidden flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold hover:bg-slate-200 transition shrink-0"
+                aria-label="العودة لصندوق المحادثات"
+              >
+                <ChevronRight className="w-4 h-4 rtl:rotate-0 ltr:rotate-180" />
+                <span>المحادثات</span>
+              </button>
+
               <img
-                src={selectedConv.customer?.avatar || `https://ui-avatars.com/api/?name=${selectedConv.customer?.name}`}
+                src={selectedConv.customer?.avatar || `https://ui-avatars.com/api/?name=${selectedConv.customer?.name}&background=1E6BFF&color=fff`}
                 alt={selectedConv.customer?.name}
-                className="w-10 h-10 rounded-full object-cover border border-slate-200 dark:border-slate-700"
+                className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover border border-slate-200 dark:border-slate-700 shrink-0"
               />
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="font-bold text-sm text-slate-900 dark:text-white">
-                    {selectedConv.customer?.name}
+
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <h3 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white truncate">
+                    {toText(selectedConv.customer?.name) || 'عميل'}
                   </h3>
-                  <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                    {selectedConv.platform}
+                  <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full capitalize ${getChannelBadge(selectedConv.platform).color}`}>
+                    {toText(selectedConv.platform)}
                   </span>
                 </div>
 
-                <div className="flex items-center gap-2 mt-0.5 text-xs">
-                  <span className={`font-bold ${
-                    selectedConv.ai_status === 'active' ? 'text-emerald-500' : 'text-amber-500'
-                  }`}>
-                    {selectedConv.ai_status === 'active' ? '🟢 AI Active' : '🟠 Human Handled'}
+                <div className="flex items-center gap-1.5 text-[10px] sm:text-xs">
+                  <span className={`font-bold ${selectedConv.ai_status === 'active' ? 'text-emerald-500' : 'text-amber-500'
+                    }`}>
+                    {selectedConv.ai_status === 'active' ? '🟢 AI نشط' : '🟠 موظف'}
                   </span>
                   <span className="text-slate-400">•</span>
                   <span className="text-slate-500 capitalize">{selectedConv.conversation_status}</span>
@@ -500,295 +569,317 @@ export default function InboxPage() {
               </div>
             </div>
 
-            {/* Action Control Buttons (Requirement #5) */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <button
-                onClick={() => handleStatusUpdate('open', 'human_handled')}
-                className="px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 rounded-xl text-xs font-bold transition flex items-center gap-1"
-              >
-                <UserCheck className="w-3.5 h-3.5" /> 👤 تحويل لموظف
-              </button>
+            {/* Action Bar Controls */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              {/* Quick AI Toggle */}
+              {selectedConv.ai_status === 'active' ? (
+                <button
+                  onClick={() => handleStatusUpdate('open', 'human_handled')}
+                  title="استلام المحادثة وإيقاف الرد الآلي مؤقتاً"
+                  className="px-2.5 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 rounded-xl text-xs font-bold transition flex items-center gap-1"
+                >
+                  <UserCheck className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">تحويل لموظف</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleStatusUpdate('open', 'active')}
+                  title="إعادة تشغيل الذكاء الاصطناعي للمحادثة"
+                  className="px-2.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 rounded-xl text-xs font-bold transition flex items-center gap-1"
+                >
+                  <Bot className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">تفعيل AI</span>
+                </button>
+              )}
 
-              <button
-                onClick={() => handleStatusUpdate('open', 'active')}
-                className="px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 rounded-xl text-xs font-bold transition flex items-center gap-1"
-              >
-                <Bot className="w-3.5 h-3.5" /> 🤖 تفعيل AI
-              </button>
-
-              <button
-                onClick={() => handleStatusUpdate('closed', selectedConv.ai_status)}
-                className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition"
-              >
-                🔒 إغلاق المحادثة
-              </button>
-
+              {/* Close Conversation */}
               <button
                 onClick={() => handleStatusUpdate('closed', 'active')}
-                className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition shadow-xs"
+                title="إغلاق المحادثة وإعادة تفعيل AI"
+                className="px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition hidden sm:inline-flex"
               >
-                إغلاق المحادثة وإعادة تفعيل AI
+                🔒 إغلاق
               </button>
 
-              {/* Assign Agent Dropdown */}
-              <select
-                value={selectedConv.assigned_agent_id || 0}
-                onChange={(e) => handleAssignAgent(Number(e.target.value))}
-                className="px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-700 dark:text-slate-300 font-semibold"
-              >
-                <option value={0}>تحديد الموظف...</option>
-                {agents.map(a => (
-                  <option key={a.id} value={a.id}>{a.name}</option>
-                ))}
-              </select>
-
+              {/* Customer 360 Toggle Button */}
               <button
                 onClick={() => setShowCustomer360(!showCustomer360)}
-                className="p-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl text-slate-600 dark:text-slate-300 text-xs font-bold flex items-center gap-1"
+                title="بيانات العميل 360"
+                className={`p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 transition ${showCustomer360
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200'
+                  }`}
               >
-                {showCustomer360 ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
-                Customer 360
+                <Phone className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">العميل 360</span>
               </button>
             </div>
           </div>
 
-          {/* Pinned Messages Section (Requirement #20) */}
+          {/* Pinned Messages Banner */}
           {pinnedMessages.length > 0 && (
-            <div className="bg-amber-500/10 border-b border-amber-500/20 p-2.5 px-4 flex items-center justify-between text-xs text-amber-800 dark:text-amber-300">
-              <div className="flex items-center gap-2 overflow-x-auto">
-                <Pin className="w-4 h-4 text-amber-600 shrink-0 fill-amber-600" />
-                <span className="font-bold shrink-0">مثبت (Pinned):</span>
-                <span className="truncate">{pinnedMessages[0]?.message?.content}</span>
+            <div className="bg-amber-500/10 border-b border-amber-500/20 py-2 px-3 flex items-center justify-between text-xs text-amber-800 dark:text-amber-300 shrink-0">
+              <div className="flex items-center gap-2 overflow-x-auto min-w-0">
+                <Pin className="w-3.5 h-3.5 text-amber-600 shrink-0 fill-amber-600" />
+                <span className="font-bold shrink-0">مثبت:</span>
+                <span className="truncate">{toText(pinnedMessages[0]?.message?.content ?? pinnedMessages[0]?.message ?? pinnedMessages[0])}</span>
               </div>
-              <span className="text-[10px] opacity-75">{pinnedMessages.length} رسالة مثبتة</span>
             </div>
           )}
 
-          {/* Messages View */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/30 dark:bg-slate-900/30">
-            {messages.map((m) => {
-              const isCustomer = m.sender_type === 'customer';
-              const isAi = m.sender_type === 'ai';
-              const isAgent = m.sender_type === 'agent';
+          {/* Messages Scroll Area */}
+          <div
+            ref={chatScrollRef}
+            className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3.5 bg-slate-50/40 dark:bg-slate-950/40"
+          >
+            {messages.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 text-slate-400 space-y-2">
+                <MessageSquare className="w-8 h-8 opacity-40 text-blue-500" />
+                <p className="text-xs font-medium">لا توجد رسائل سابقة في هذه المحادثة.</p>
+              </div>
+            ) : (
+              messages.map((m) => {
+                const isCustomer = m.sender_type === 'customer';
+                const isAi = m.sender_type === 'ai';
+                const isAgent = m.sender_type === 'agent';
 
-              return (
-                <div
-                  key={m.id}
-                  className={`flex flex-col ${isCustomer ? 'items-start' : 'items-end'}`}
-                >
-                  <div className="flex items-center gap-1.5 mb-1 text-[10px] text-slate-400">
-                    <span>{isCustomer ? (selectedConv.customer?.name || 'عميل') : isAi ? '🤖 NEXORA AI' : `👤 ${m.sender_name || 'موظف الدعم'}`}</span>
-                    <span>•</span>
-                    <span>{new Date(m.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</span>
-                    <button onClick={() => handleTogglePin(m.id)} className="hover:text-amber-500 p-0.5">
-                      <Pin className="w-3 h-3" />
-                    </button>
-                  </div>
-
+                return (
                   <div
-                    className={`max-w-md p-3.5 rounded-2xl text-xs leading-relaxed shadow-xs ${
-                      isCustomer
-                        ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-tr-none border border-slate-200 dark:border-slate-700'
-                        : isAi
-                        ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white rounded-tl-none font-medium'
-                        : 'bg-slate-800 text-white rounded-tl-none dark:bg-slate-700 font-medium'
-                    }`}
+                    key={m.id}
+                    className={`flex flex-col ${isCustomer ? 'items-start' : 'items-end'}`}
                   >
-                    {m.media_url && (
-                      <img src={m.media_url} alt="مرفق" className="max-w-xs rounded-xl mb-2 border border-white/20" />
-                    )}
-                    <p className="whitespace-pre-wrap">{m.content}</p>
+                    {/* Sender Label */}
+                    <div className="flex items-center gap-1.5 mb-1 text-[10px] text-slate-400 px-1 font-medium">
+                      <span>{isCustomer ? (selectedConv.customer?.name || 'العميل') : isAi ? '🤖 NEXORA AI' : `👤 ${m.sender_name || 'موظف الدعم'}`}</span>
+                      <span>•</span>
+                      <span className="font-mono">{m.created_at ? new Date(m.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                    </div>
+
+                    {/* Message Bubble */}
+                    <div
+                      className={`max-w-[85%] sm:max-w-md p-3 rounded-2xl text-xs sm:text-sm leading-relaxed shadow-xs break-words whitespace-pre-wrap ${isCustomer
+                        ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 rounded-tr-xs border border-slate-200/80 dark:border-slate-700/80'
+                        : isAi
+                          ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-tl-xs shadow-blue-600/20'
+                          : 'bg-emerald-600 text-white rounded-tl-xs shadow-emerald-600/20'
+                        }`}
+                      dir="auto"
+                    >
+                      {/* Media image if present */}
+                      {m.media_url && (
+                        <div className="mb-2 rounded-xl overflow-hidden max-h-60 bg-black/10">
+                          <img
+                            src={m.media_url}
+                            alt="مرفق"
+                            className="w-full h-auto object-cover cursor-pointer hover:scale-105 transition duration-200"
+                            onClick={() => window.open(m.media_url, '_blank')}
+                          />
+                        </div>
+                      )}
+
+                      <div>{toText(m.content)}</div>
+
+                      {/* Delivery Status Indicator */}
+                      {!isCustomer && (
+                        <div className="flex items-center justify-end gap-1 mt-1 text-[9px] opacity-80 font-mono">
+                          {m.status === 'sent' || m.status === 'delivered' ? (
+                            <CheckCheck className="w-3 h-3 text-cyan-200" />
+                          ) : (
+                            <Check className="w-3 h-3 text-white/70" />
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
             <div ref={messagesEndRef} />
           </div>
 
-          {/* 3. COMPOSER AREA: Quick Replies & Composer */}
-          <div className="p-3.5 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-2 relative">
-            
-            {/* Suggested Quick Replies (Requirement #24) */}
-            {suggestedReplies.length > 0 && (
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
-                <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1 shrink-0">
-                  <Zap className="w-3.5 h-3.5" /> ⚡ مقترحة:
-                </span>
-                {suggestedReplies.map(sr => (
+          {/* AI Suggested Replies Chips */}
+          {suggestedReplies.length > 0 && (
+            <div className="px-3 py-1.5 bg-blue-50/70 dark:bg-blue-950/30 border-t border-blue-100 dark:border-blue-900/40 flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0">
+              <span className="text-[10px] font-bold text-blue-600 dark:text-cyan-400 flex items-center gap-1 shrink-0">
+                <Sparkles className="w-3 h-3" /> اقتراحات AI:
+              </span>
+              {suggestedReplies.map((sug, idx) => {
+                const text = toText(sug);
+                const label = typeof sug === 'string' ? sug : (toText(sug?.title) || toText(sug?.shortcut) || text);
+                return (
                   <button
-                    key={sr.id}
-                    onClick={() => handleSelectQuickReply(sr.response_text)}
-                    className="px-2.5 py-1 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded-xl text-[11px] font-semibold hover:bg-emerald-100 transition whitespace-nowrap"
+                    key={typeof sug === 'object' && sug?.id != null ? sug.id : idx}
+                    onClick={() => handleSelectQuickReply(text)}
+                    title={text}
+                    className="px-2.5 py-1 bg-white dark:bg-slate-800 border border-blue-200 dark:border-blue-800 rounded-lg text-xs text-blue-700 dark:text-cyan-300 whitespace-nowrap hover:bg-blue-100 transition shrink-0 font-medium"
                   >
-                    {sr.title}
+                    {label}
                   </button>
-                ))}
-              </div>
-            )}
-
-            {/* Quick Reply Pills Bar (Requirement #21) */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
-              <span className="text-[11px] font-bold text-slate-400 shrink-0">⚡ الردود السريعة:</span>
-              {quickReplies.map(qr => (
-                <button
-                  key={qr.id}
-                  onClick={() => handleSelectQuickReply(qr.response_text)}
-                  className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-[11px] font-bold transition whitespace-nowrap"
-                >
-                  {qr.title}
-                </button>
-              ))}
+                );
+              })}
             </div>
+          )}
 
-            {/* Shortcut Autocomplete Dropdown (Requirement #22) */}
-            {showShortcutMenu && (
-              <div className="absolute bottom-16 right-4 z-30 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl p-2 max-w-xs w-full space-y-1">
-                <p className="text-[10px] font-bold text-slate-400 px-2 py-1">اختر اختصار رد سريع:</p>
+          {/* Message Composer (Safe for mobile virtual keyboards) */}
+          <div className="p-2.5 sm:p-3 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shrink-0 safe-bottom">
+            {/* Shortcuts Dropdown popup */}
+            {showShortcutMenu && quickReplies.length > 0 && (
+              <div className="mb-2 p-2 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 max-h-40 overflow-y-auto space-y-1">
                 {quickReplies.map(qr => (
                   <div
                     key={qr.id}
                     onClick={() => handleSelectQuickReply(qr.response_text)}
                     className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg cursor-pointer flex items-center justify-between text-xs"
                   >
-                    <span className="font-bold text-teal-600 font-mono">{qr.shortcut}</span>
-                    <span className="text-slate-600 dark:text-slate-300 text-[11px] truncate max-w-[140px]">{qr.title}</span>
+                    <span className="font-bold text-blue-600 font-mono">{qr.shortcut}</span>
+                    <span className="text-slate-600 dark:text-slate-300 text-[11px] truncate max-w-[200px]">{qr.title}</span>
                   </div>
                 ))}
               </div>
             )}
 
-            {/* Main Message Input Form */}
+            {/* Input & Send Form */}
             <form onSubmit={handleSendMessage} className="flex items-center gap-2">
               <input
                 type="text"
-                placeholder="اكتب ردك هنا... (اكتب / للاختصارات)"
+                placeholder="اكتب ردك هنا... (اكتب / للردود السريعة)"
                 value={inputText}
                 onChange={handleInputChange}
-                className="flex-1 p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white focus:outline-hidden focus:border-teal-500"
+                // text-base on mobile prevents iOS automatic viewport zoom!
+                className="flex-1 p-2.5 sm:p-3 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-base sm:text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-hidden focus:border-blue-500 transition"
               />
 
               <button
                 type="submit"
                 disabled={sending || !inputText.trim()}
-                className="px-5 py-3 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1 shadow-md shadow-teal-600/20 disabled:opacity-50"
+                className="px-4 sm:px-5 py-2.5 sm:py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs sm:text-sm font-bold transition flex items-center gap-1.5 shadow-md shadow-blue-600/20 disabled:opacity-50 shrink-0"
               >
-                <Send className="w-4 h-4" /> إرسال
+                <Send className="w-4 h-4 rtl:rotate-180" />
+                <span className="hidden sm:inline">إرسال</span>
               </button>
             </form>
           </div>
+
         </div>
       ) : (
-        <div className="flex-1 flex items-center justify-center text-slate-400 text-sm">
-          اختر محادثة من القائمة للبدء
+        <div className="hidden md:flex flex-1 flex-col items-center justify-center p-8 text-center text-slate-400 space-y-3">
+          <div className="w-16 h-16 rounded-2xl bg-blue-50 dark:bg-blue-950/40 flex items-center justify-center text-blue-500">
+            <MessageSquare className="w-8 h-8" />
+          </div>
+          <h3 className="font-bold text-base text-slate-800 dark:text-slate-200">صندوق محادثات NEXORA</h3>
+          <p className="text-xs max-w-sm text-slate-500 leading-relaxed">
+            اختر محادثة من القائمة للرد على العملاء أو إدارة حالة الذكاء الاصطناعي.
+          </p>
         </div>
       )}
 
-      {/* 4. RIGHT SIDEBAR: Customer 360 (Requirement #2 & #28) */}
+      {/* ======================================================== */}
+      {/* 3. CUSTOMER 360 PANEL (Drawer on mobile, column on desktop) */}
+      {/* ======================================================== */}
       {selectedConv && showCustomer360 && (
-        <div className="w-80 border-r border-slate-200 dark:border-slate-800 flex flex-col h-full bg-slate-50/50 dark:bg-slate-900/50 overflow-y-auto p-4 space-y-5">
-          
-          {/* Customer Profile Header */}
-          <div className="text-center space-y-2 bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
-            <img
-              src={customer360Data?.avatar || `https://ui-avatars.com/api/?name=${selectedConv.customer?.name}`}
-              alt={customer360Data?.name}
-              className="w-16 h-16 rounded-full mx-auto object-cover border-2 border-teal-500"
-            />
-            <h3 className="font-bold text-sm text-slate-900 dark:text-white">
-              {customer360Data?.name || selectedConv.customer?.name}
-            </h3>
-            <p className="text-xs text-slate-500 font-mono">
-              {customer360Data?.phone || 'بدون تليفون مسجل'}
-            </p>
+        <>
+          {/* Mobile Backdrop */}
+          <div
+            onClick={() => setShowCustomer360(false)}
+            className="md:hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs"
+          />
 
-            <div className="flex items-center justify-center gap-1 flex-wrap pt-1">
-              {customer360Data?.identities?.map(id => (
-                <span key={id.id} className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 capitalize">
-                  {id.platform}: {id.platform_user_id}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          {/* Customer 360 Commercial Stats */}
-          <div className="grid grid-cols-2 gap-2">
-            <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 space-y-1">
-              <span className="text-[10px] font-bold text-slate-400 block">إجمالي الطلبات</span>
-              <span className="text-sm font-extrabold text-teal-600 dark:text-teal-400">
-                {customer360Data?.total_orders || 0} طلبات
-              </span>
+          <div className={`
+            fixed md:static inset-y-0 left-0 z-50 md:z-auto
+            w-80 sm:w-88 flex flex-col h-full bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 shadow-2xl md:shadow-none overflow-y-auto p-4 space-y-4 shrink-0
+          `}>
+            {/* Mobile Header with close button */}
+            <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800">
+              <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-blue-500" />
+                <span>ملف العميل 360</span>
+              </h3>
+              <button
+                onClick={() => setShowCustomer360(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
 
-            <div className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-800 space-y-1">
-              <span className="text-[10px] font-bold text-slate-400 block">إجمالي الإنفاق</span>
-              <span className="text-sm font-extrabold text-emerald-600 dark:text-emerald-400">
-                {customer360Data?.total_spent || 0} ج.م
-              </span>
-            </div>
-          </div>
-
-          {/* Current / Last Order Info */}
-          {customer360Data?.last_order && (
-            <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-2 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-slate-900 dark:text-white flex items-center gap-1">
-                  <ShoppingBag className="w-3.5 h-3.5 text-teal-600" /> آخر طلب #{customer360Data.last_order.order_number}
-                </span>
-                <span className="text-[10px] font-bold text-emerald-600 uppercase">
-                  {customer360Data.last_order.order_status}
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-500">
-                المبلغ الإجمالي: <span className="font-bold text-slate-800 dark:text-slate-200">{customer360Data.last_order.total_amount} ج.م</span>
+            {/* Profile Card */}
+            <div className="text-center space-y-2 bg-slate-50 dark:bg-slate-800/50 p-4 rounded-2xl border border-slate-200 dark:border-slate-800">
+              <img
+                src={customer360Data?.avatar || `https://ui-avatars.com/api/?name=${selectedConv.customer?.name}&background=1E6BFF&color=fff`}
+                alt={customer360Data?.name}
+                className="w-16 h-16 rounded-full mx-auto object-cover border-2 border-blue-500 shadow-xs"
+              />
+              <h3 className="font-bold text-sm text-slate-900 dark:text-white">
+                {customer360Data?.name || selectedConv.customer?.name}
+              </h3>
+              <p className="text-xs text-slate-500 font-mono">
+                {customer360Data?.phone || 'بدون هاتف مسجل'}
               </p>
             </div>
-          )}
 
-          {/* Customer Notes (Requirement #2 & #28) */}
-          <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3">
-            <h4 className="font-bold text-xs text-slate-900 dark:text-white flex items-center gap-1">
-              <FileText className="w-3.5 h-3.5 text-teal-600" /> ملاحظات العميل (Notes)
-            </h4>
+            {/* Stats */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-800 text-center">
+                <span className="text-[10px] font-bold text-slate-400 block mb-1">الطلبات والمشاريع</span>
+                <span className="text-sm font-extrabold text-blue-600 dark:text-cyan-400">
+                  {customer360Data?.total_orders || 0}
+                </span>
+              </div>
 
-            <form onSubmit={handleAddNote} className="space-y-2">
-              <input
-                type="text"
-                placeholder="إضافة ملاحظة جديدة..."
-                value={newNoteText}
-                onChange={(e) => setNewNoteText(e.target.value)}
-                className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"
-              />
-            </form>
-
-            <div className="space-y-2 max-h-36 overflow-y-auto">
-              {customer360Data?.notes_list?.map(n => (
-                <div key={n.id} className="p-2 bg-slate-50 dark:bg-slate-800/60 rounded-xl text-[11px] space-y-0.5">
-                  <p className="font-medium text-slate-800 dark:text-slate-200">{n.note_text}</p>
-                  <p className="text-[9px] text-slate-400">{n.author_name} • {new Date(n.created_at).toLocaleDateString('ar-EG')}</p>
-                </div>
-              ))}
+              <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-800 text-center">
+                <span className="text-[10px] font-bold text-slate-400 block mb-1">إجمالي التعاقدات</span>
+                <span className="text-sm font-extrabold text-emerald-600 dark:text-emerald-400">
+                  {customer360Data?.total_spent || 0} ج.م
+                </span>
+              </div>
             </div>
-          </div>
 
-          {/* Customer Activity Timeline (Requirement #28) */}
-          <div className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3">
-            <h4 className="font-bold text-xs text-slate-900 dark:text-white flex items-center gap-1">
-              <Activity className="w-3.5 h-3.5 text-teal-600" /> سجّل النشاط (Activity Timeline)
-            </h4>
+            {/* Notes Section */}
+            <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-2.5">
+              <h4 className="font-bold text-xs text-slate-900 dark:text-white flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5 text-blue-500" /> ملاحظات الفريق (Notes)
+              </h4>
 
-            <div className="space-y-3 relative before:absolute before:right-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-200 dark:before:bg-slate-800 pr-4">
-              {customer360Data?.activities?.map(act => (
-                <div key={act.id} className="relative text-[11px] space-y-0.5">
-                  <div className="w-2.5 h-2.5 rounded-full bg-teal-500 absolute -right-4 top-1"></div>
-                  <p className="font-semibold text-slate-800 dark:text-slate-200">{act.description}</p>
-                  <p className="text-[9px] text-slate-400">{new Date(act.created_at).toLocaleString('ar-EG')}</p>
-                </div>
-              ))}
+              <form onSubmit={handleAddNote} className="space-y-2">
+                <input
+                  type="text"
+                  placeholder="إضافة ملاحظة جديدة..."
+                  value={newNoteText}
+                  onChange={(e) => setNewNoteText(e.target.value)}
+                  className="w-full p-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-white"
+                />
+              </form>
+
+              <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                {toArray(customer360Data?.notes_list).map(n => (
+                  <div key={n.id} className="p-2 bg-white dark:bg-slate-800 rounded-xl text-[11px] shadow-xs">
+                    <p className="font-medium text-slate-800 dark:text-slate-200">{n.note_text}</p>
+                    <p className="text-[9px] text-slate-400 mt-0.5">{n.author_name} • {new Date(n.created_at).toLocaleDateString('ar-EG')}</p>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
 
-        </div>
+            {/* Activity Timeline */}
+            <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-2.5">
+              <h4 className="font-bold text-xs text-slate-900 dark:text-white flex items-center gap-1.5">
+                <Activity className="w-3.5 h-3.5 text-blue-500" /> سجل التفاعل
+              </h4>
+
+              <div className="space-y-2 text-[11px] max-h-40 overflow-y-auto pr-1">
+                {toArray(customer360Data?.activities).map(act => (
+                  <div key={act.id} className="p-2 bg-white dark:bg-slate-800 rounded-xl space-y-0.5 shadow-xs">
+                    <p className="font-semibold text-slate-800 dark:text-slate-200">{act.description}</p>
+                    <p className="text-[9px] text-slate-400">{new Date(act.created_at).toLocaleString('ar-EG')}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+          </div>
+        </>
       )}
+
     </div>
   );
 }
