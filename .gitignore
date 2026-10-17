@@ -22,3 +22,7 @@ logs/
 .DS_Store
 Thumbs.db
 *.local
+
+backend/*.db
+backend/*.db.backup*
+
