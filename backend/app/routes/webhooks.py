@@ -4,6 +4,31 @@ from app.models import Conversation, Customer, CustomerIdentity, Message, Custom
 from app.extensions import db
 from app.config import Config
 from app.services import AIService, WhatsAppService, TelegramService, InstagramService, SocketService
+from app.services.messenger_service import MessengerService
+
+try:
+    from app.services import TikTokService
+except ImportError:
+    TikTokService = None
+
+PLACEHOLDER_PREFIXES = ("عميل إنستغرام", "عميل ماسنجر")
+
+
+def _is_placeholder(name):
+    return not name or name.startswith(PLACEHOLDER_PREFIXES)
+
+
+def _resolve_social_profile(platform, sender_id, fallback_name, fallback_username):
+    """Fetch the real name/username from Meta, only when we don't have one yet."""
+    identity = CustomerIdentity.query.filter_by(platform=platform, platform_user_id=sender_id).first()
+    if identity and identity.customer and not _is_placeholder(identity.customer.name):
+        return fallback_name, fallback_username
+
+    service = InstagramService if platform == 'instagram' else MessengerService
+    profile = service.get_user_profile(sender_id)
+    if profile and profile.get('name'):
+        return profile['name'], profile.get('username') or fallback_username
+    return fallback_name, fallback_username
 
 webhooks_bp = Blueprint('webhooks', __name__, url_prefix='/api/webhooks')
 telegram_api_bp = Blueprint('telegram_api', __name__, url_prefix='/api/telegram')
@@ -160,11 +185,16 @@ def handle_instagram_webhook():
                         text = f"مرفق {att_type} من إنستغرام"
 
                 if sender_id and text:
+                    ig_name, ig_username = _resolve_social_profile(
+                        'instagram', sender_id,
+                        f"عميل إنستغرام ({sender_id[-4:]})",
+                        f"ig_{sender_id[-4:]}"
+                    )
                     _process_incoming_message(
                         platform='instagram',
                         platform_user_id=sender_id,
-                        customer_name=f"عميل إنستغرام ({sender_id[-4:]})",
-                        username=f"ig_{sender_id[-4:]}",
+                        customer_name=ig_name,
+                        username=ig_username,
                         content=text,
                         msg_type=msg_type,
                         media_url=media_url,
@@ -172,6 +202,77 @@ def handle_instagram_webhook():
                     )
     except Exception as e:
         print(f"Instagram webhook parse error: {e}")
+
+    return jsonify({"status": "EVENT_RECEIVED"}), 200
+
+# --- FACEBOOK MESSENGER WEBHOOK ---
+@webhooks_bp.route('/messenger', methods=['GET'], strict_slashes=False)
+def verify_messenger_webhook():
+    mode = request.args.get('hub.mode')
+    token = request.args.get('hub.verify_token')
+    challenge = request.args.get('hub.challenge')
+    expected = getattr(Config, 'MESSENGER_VERIFY_TOKEN', None)
+
+    if mode == 'subscribe' and token and expected and token == expected:
+        return str(challenge), 200, {'Content-Type': 'text/plain'}
+    return jsonify({"error": "Forbidden"}), 403
+
+@webhooks_bp.route('/messenger', methods=['POST'], strict_slashes=False)
+def handle_messenger_webhook():
+    data = request.get_json() or {}
+    print(f"[Messenger Webhook POST] Received payload: {data}")
+    try:
+        if data.get('object') != 'page':
+            return jsonify({"status": "IGNORED"}), 200
+
+        for entry in data.get('entry', []):
+            page_id = str(entry.get('id', ''))
+            for msg_item in entry.get('messaging', []):
+                sender_id = str(msg_item.get('sender', {}).get('id', ''))
+                message = msg_item.get('message')
+
+                # Skip delivery/read receipts, postbacks, etc.
+                if not message:
+                    continue
+                # Skip echoes and messages from the page itself
+                if message.get('is_echo') or sender_id == page_id:
+                    continue
+
+                text = message.get('text', '')
+                msg_id = message.get('mid')
+                attachments = message.get('attachments', [])
+                msg_type = 'text'
+                media_url = None
+
+                if not text and attachments:
+                    first_att = attachments[0]
+                    att_type = first_att.get('type')
+                    media_url = first_att.get('payload', {}).get('url')
+                    if att_type == 'image':
+                        msg_type = 'image'
+                        text = "صورة مرفقة من ماسنجر"
+                    else:
+                        msg_type = att_type or 'document'
+                        text = f"مرفق {att_type} من ماسنجر"
+
+                if sender_id and text:
+                    fb_name, fb_username = _resolve_social_profile(
+                        'messenger', sender_id,
+                        f"عميل ماسنجر ({sender_id[-4:]})",
+                        f"fb_{sender_id[-4:]}"
+                    )
+                    _process_incoming_message(
+                        platform='messenger',
+                        platform_user_id=sender_id,
+                        customer_name=fb_name,
+                        username=fb_username,
+                        content=text,
+                        msg_type=msg_type,
+                        media_url=media_url,
+                        platform_msg_id=msg_id
+                    )
+    except Exception as e:
+        print(f"Messenger webhook parse error: {e}")
 
     return jsonify({"status": "EVENT_RECEIVED"}), 200
 
@@ -190,6 +291,14 @@ def _process_incoming_message(platform, platform_user_id, customer_name, phone=N
     is_new_customer = False
     if identity:
         customer = identity.customer
+        if (platform in ('instagram', 'messenger')
+                and _is_placeholder(customer.name)
+                and not _is_placeholder(customer_name)):
+            customer.name = customer_name
+            customer.avatar = f"https://ui-avatars.com/api/?name={customer_name.replace(' ', '+')}&background=1E6BFF&color=fff"
+            if username:
+                identity.username = username
+            db.session.commit()
     else:
         customer = None
         if phone:
@@ -302,7 +411,9 @@ def _process_incoming_message(platform, platform_user_id, customer_name, phone=N
                     TelegramService.send_message(platform_user_id, ai_reply)
                 elif platform == 'instagram':
                     InstagramService.send_message(platform_user_id, ai_reply)
-                elif platform == 'tiktok':
+                elif platform == 'messenger':
+                    MessengerService.send_message(platform_user_id, ai_reply)
+                elif platform == 'tiktok' and TikTokService:
                     TikTokService.send_message(platform_user_id, ai_reply)
 
                 # Broadcast AI message to dashboard

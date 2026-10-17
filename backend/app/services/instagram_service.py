@@ -73,3 +73,28 @@ class InstagramService:
                 "success": False,
                 "error": str(e)
             }
+
+    @staticmethod
+    def get_user_profile(igsid):
+        """Fetch name/username of the person who messaged us (IGSID)."""
+        token = Config.INSTAGRAM_ACCESS_TOKEN
+        if not token or not igsid:
+            return None
+
+        try:
+            res = requests.get(
+                f"https://graph.instagram.com/v26.0/{igsid}",
+                params={"fields": "name,username"},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=8
+            )
+            if res.ok:
+                data = res.json()
+                return {
+                    "name": data.get("name") or data.get("username"),
+                    "username": data.get("username")
+                }
+            print(f"[Instagram Profile] status={res.status_code}, response={res.text}")
+        except requests.RequestException as e:
+            print(f"[Instagram Profile Exception]: {e}")
+        return None
