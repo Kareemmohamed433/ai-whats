@@ -11,7 +11,12 @@ try:
 except ImportError:
     TikTokService = None
 
-PLACEHOLDER_PREFIXES = ("عميل إنستغرام", "عميل ماسنجر")
+PLACEHOLDER_PREFIXES = ("عميل إنستغرام", "عميل ماسنجر", "عميل واتساب")
+
+
+def _looks_like_phone(value):
+    """Phone numbers in WhatsApp webhooks are digits only; a BSUID looks like 'EG.abc123'."""
+    return bool(value) and str(value).isdigit()
 
 
 def _is_placeholder(name):
@@ -57,17 +62,53 @@ def handle_whatsapp_webhook():
                 contacts = value.get('contacts', [])
 
                 for msg_data in messages:
-                    phone = msg_data.get('from')
+                    raw_from = str(msg_data.get('from') or '')
+                    wa_sender = (msg_data.get('whatsapp') or {}).get('sender') or {}
+
+                    # Match the contact entry that belongs to this sender
+                    contact = next(
+                        (c for c in contacts
+                         if c.get('wa_id') == raw_from
+                         or (c.get('user_id') and c.get('user_id') == msg_data.get('user_id'))),
+                        contacts[0] if contacts else {}
+                    )
+                    profile = contact.get('profile', {}) or {}
+
+                    # BSUID (WhatsApp username rollout): may live in several places
+                    bsuid = (msg_data.get('user_id')
+                             or wa_sender.get('user_id')
+                             or contact.get('user_id')
+                             or profile.get('user_id')
+                             or (raw_from if not _looks_like_phone(raw_from) else None))
+
+                    # Phone only if it is really a phone (digits); otherwise None
+                    phone = raw_from if _looks_like_phone(raw_from) else None
+                    if not phone and _looks_like_phone(contact.get('wa_id')):
+                        phone = contact.get('wa_id')
+
+                    username = profile.get('username') or wa_sender.get('username')
+                    profile_name = profile.get('name')
+
+                    # Prefer phone (keeps old customers matching), else BSUID
+                    platform_user_id = phone or bsuid
+                    if not platform_user_id:
+                        print(f"[WhatsApp Webhook] No phone/BSUID in message, skipping: {msg_data}")
+                        continue
+
+                    sender_name = (profile_name
+                                   or username
+                                   or f"عميل واتساب ({str(platform_user_id)[-4:]})")
+
                     text = msg_data.get('text', {}).get('body', '')
                     msg_type = msg_data.get('type', 'text')
                     msg_id = msg_data.get('id')
-                    sender_name = contacts[0].get('profile', {}).get('name', phone) if contacts else phone
 
                     _process_incoming_message(
                         platform='whatsapp',
-                        platform_user_id=phone,
+                        platform_user_id=platform_user_id,
                         customer_name=sender_name,
                         phone=phone,
+                        username=username,
                         content=text,
                         msg_type=msg_type,
                         platform_msg_id=msg_id
@@ -291,13 +332,16 @@ def _process_incoming_message(platform, platform_user_id, customer_name, phone=N
     is_new_customer = False
     if identity:
         customer = identity.customer
-        if (platform in ('instagram', 'messenger')
+        if (platform in ('instagram', 'messenger', 'whatsapp')
                 and _is_placeholder(customer.name)
                 and not _is_placeholder(customer_name)):
             customer.name = customer_name
             customer.avatar = f"https://ui-avatars.com/api/?name={customer_name.replace(' ', '+')}&background=1E6BFF&color=fff"
-            if username:
-                identity.username = username
+            db.session.commit()
+
+        # Keep the username up to date (WhatsApp users can change it)
+        if username and identity.username != username:
+            identity.username = username
             db.session.commit()
     else:
         customer = None

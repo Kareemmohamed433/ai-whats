@@ -55,4 +55,29 @@ class MessengerService:
             print(f"[Messenger Profile] status={res.status_code}, response={res.text}")
         except requests.RequestException as e:
             print(f"[Messenger Profile Exception]: {e}")
+
+        # Fallback: Conversations API (participants include the user's name)
+        return MessengerService._get_name_from_conversations(psid, token)
+
+    @staticmethod
+    def _get_name_from_conversations(psid, token):
+        try:
+            res = requests.get(
+                f"{GRAPH_URL}/me/conversations",
+                params={
+                    "user_id": psid,
+                    "fields": "participants",
+                    "access_token": token,
+                },
+                timeout=8,
+            )
+            if not res.ok:
+                print(f"[Messenger Conversations Fallback] status={res.status_code}, response={res.text}")
+                return None
+            for conv in res.json().get("data", []):
+                for p in conv.get("participants", {}).get("data", []):
+                    if str(p.get("id")) == str(psid) and p.get("name"):
+                        return {"name": p["name"], "username": None}
+        except requests.RequestException as e:
+            print(f"[Messenger Conversations Fallback Exception]: {e}")
         return None
