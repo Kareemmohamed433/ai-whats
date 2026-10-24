@@ -14,6 +14,20 @@ from app.models.user import User
 logger = logging.getLogger(__name__)
 
 
+def _get_vapid_config():
+    priv = getattr(Config, "VAPID_PRIVATE_KEY", "")
+    pub = getattr(Config, "VAPID_PUBLIC_KEY", "")
+    email = getattr(Config, "VAPID_CLAIM_EMAIL", "mailto:contact@nexorasolutions.com")
+    try:
+        if current_app:
+            priv = current_app.config.get("VAPID_PRIVATE_KEY", priv)
+            pub = current_app.config.get("VAPID_PUBLIC_KEY", pub)
+            email = current_app.config.get("VAPID_CLAIM_EMAIL", email)
+    except Exception:
+        pass
+    return priv, pub, email
+
+
 class NotificationService:
     @staticmethod
     def get_user_preferences(user_id):
@@ -167,13 +181,13 @@ class NotificationService:
                 logger.warning(f"SocketIO notification emit error: {e}")
 
             # 4. Check VAPID configuration
-            vapid_private_key = Config.VAPID_PRIVATE_KEY
+            vapid_private_key, _, vapid_claim_email = _get_vapid_config()
             if not vapid_private_key:
                 logger.info("[WebPush] VAPID_PRIVATE_KEY not set. Skipping Web Push dispatch.")
                 return
 
             vapid_claims = {
-                "sub": Config.VAPID_CLAIM_EMAIL or "mailto:contact@nexorasolutions.com"
+                "sub": vapid_claim_email or "mailto:contact@nexorasolutions.com"
             }
 
             # 5. Collect active subscriptions for eligible users
@@ -241,12 +255,12 @@ class NotificationService:
     def send_test_notification(cls, user_id):
         """Sends a test Web Push notification to all active devices of the user."""
         pref = cls.get_user_preferences(user_id)
-        vapid_private_key = Config.VAPID_PRIVATE_KEY
+        vapid_private_key, _, vapid_claim_email = _get_vapid_config()
         if not vapid_private_key:
             return False, "VAPID_PRIVATE_KEY غير مهيأ في السيرفر"
 
         vapid_claims = {
-            "sub": Config.VAPID_CLAIM_EMAIL or "mailto:contact@nexorasolutions.com"
+            "sub": vapid_claim_email or "mailto:contact@nexorasolutions.com"
         }
 
         user_subs = PushSubscription.query.filter_by(user_id=user_id, is_active=True).all()

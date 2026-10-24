@@ -182,3 +182,19 @@ class Config:
         "FRONTEND_URL",
         "http://localhost:5173"
     )
+
+    # =========================
+    # Web Push (VAPID) Settings
+    # =========================
+    VAPID_PUBLIC_KEY = os.getenv(
+        "VAPID_PUBLIC_KEY",
+        ""
+    )
+    VAPID_PRIVATE_KEY = os.getenv(
+        "VAPID_PRIVATE_KEY",
+        ""
+    )
+    VAPID_CLAIM_EMAIL = os.getenv(
+        "VAPID_CLAIM_EMAIL",
+        "mailto:contact@nexorasolutions.com"
+    )

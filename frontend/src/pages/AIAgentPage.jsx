@@ -196,7 +196,7 @@ export default function AIAgentPage() {
                 rows="8"
                 value={settings.system_prompt || ''}
                 onChange={(e) => setSettings({ ...settings, system_prompt: e.target.value })}
-                placeholder="أنت مساعد خدمة العملاء لشركة NEXORA Software Solutions..."
+                placeholder="أنت أحمد، مساعد مبيعات في شركة NEXORA..."
                 className="w-full px-4 py-3 rounded-2xl text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white outline-none focus:border-blue-500 font-mono leading-relaxed"
               ></textarea>
             </div>

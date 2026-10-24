@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.config import Config
 from app.extensions import db
@@ -18,12 +18,24 @@ def _get_current_user_id():
         return identity
 
 
+def _get_vapid_keys():
+    pub = getattr(Config, "VAPID_PUBLIC_KEY", "")
+    priv = getattr(Config, "VAPID_PRIVATE_KEY", "")
+    try:
+        if current_app:
+            pub = current_app.config.get("VAPID_PUBLIC_KEY", pub)
+            priv = current_app.config.get("VAPID_PRIVATE_KEY", priv)
+    except Exception:
+        pass
+    return pub, priv
+
+
 # --- VAPID PUBLIC KEY ---
 @notifications_bp.route('/vapid-public-key', methods=['GET'])
 @push_alias_bp.route('/vapid-public-key', methods=['GET'])
 def get_vapid_public_key():
     """Return public VAPID key for browser PushManager subscription."""
-    public_key = Config.VAPID_PUBLIC_KEY or ""
+    public_key, _ = _get_vapid_keys()
     return jsonify({
         "configured": bool(public_key),
         "public_key": public_key
@@ -39,9 +51,10 @@ def get_notification_status():
     user_id = _get_current_user_id()
     pref = NotificationService.get_user_preferences(user_id)
     subscriptions = PushSubscription.query.filter_by(user_id=user_id, is_active=True).order_by(PushSubscription.last_used_at.desc()).all()
+    pub, priv = _get_vapid_keys()
 
     return jsonify({
-        "vapid_configured": bool(Config.VAPID_PUBLIC_KEY and Config.VAPID_PRIVATE_KEY),
+        "vapid_configured": bool(pub and priv),
         "preferences": pref.to_dict(),
         "devices_count": len(subscriptions),
         "devices": [s.to_dict() for s in subscriptions]
