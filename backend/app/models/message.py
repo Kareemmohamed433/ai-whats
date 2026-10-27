@@ -42,7 +42,7 @@ class Message(db.Model):
             "metadata": meta,
             "status": self.status,
             "attachments": [att.to_dict() for att in self.attachments],
-            "created_at": self.created_at.isoformat() if self.created_at else None
+            "created_at": (self.created_at.isoformat() + 'Z') if self.created_at else None
         }
 
 class MessageAttachment(db.Model):
@@ -76,6 +76,5 @@ class MessageAttachment(db.Model):
             "direction": self.direction,
             "provider_media_id": self.provider_media_id,
             "status": self.status,
-            "created_at": self.created_at.isoformat() if self.created_at else None
+            "created_at": (self.created_at.isoformat() + 'Z') if self.created_at else None
         }
-

@@ -92,35 +92,56 @@ def send_message():
         if existing_att and not existing_att.message_id:
             existing_att.message_id = msg.id
             existing_att.conversation_id = conv.id
+            # FIX: backfill msg fields so WhatsApp dispatch can see the media
+            if not msg.media_url and existing_att.file_url:
+                msg.media_url = existing_att.file_url
+            if msg.message_type == 'text' and existing_att.file_type in ('image', 'video', 'document', 'audio'):
+                msg.message_type = existing_att.file_type
 
     db.session.commit()
 
     # Dispatch to platform API channel (Channel Independence)
     customer = conv.customer
     recipient = (customer.phone if customer else None) or conv.platform_conversation_id
-    if conv.platform == 'whatsapp':
-        if msg.message_type in ('image', 'video', 'document', 'audio') and msg.media_url:
-            # Build full URL if relative
-            full_media_url = msg.media_url
-            if full_media_url.startswith('/'):
-                base = (getattr(Config, 'FRONTEND_URL', None) or '').rstrip('/')
-                full_media_url = f"{base}{full_media_url}"
-            first_filename = attachments_data[0].get('file_name') if attachments_data else None
-            WhatsAppService.send_media(
-                recipient=recipient,
-                media_type=msg.message_type,
-                media_url=full_media_url,
-                caption=content if content != f"مرفق: {first_filename}" else None,
-                filename=first_filename
-            )
-        else:
-            WhatsAppService.send_message(recipient, content)
-    elif conv.platform == 'telegram':
-        TelegramService.send_message(conv.platform_conversation_id, content)
-    elif conv.platform == 'instagram':
-        InstagramService.send_message(conv.platform_conversation_id, content)
-    elif conv.platform == 'tiktok' and TikTokService:
-        TikTokService.send_message(conv.platform_conversation_id, content)
+    try:
+        if conv.platform == 'whatsapp':
+            if msg.message_type in ('image', 'video', 'document', 'audio') and msg.media_url:
+                # Build full URL if relative — must use BACKEND_URL so Meta can fetch the file
+                full_media_url = msg.media_url
+                if full_media_url.startswith('/'):
+                    base = (
+                        getattr(Config, 'BACKEND_URL', None)
+                        or getattr(Config, 'BASE_URL', None)
+                        or getattr(Config, 'FRONTEND_URL', None)
+                        or ''
+                    ).rstrip('/')
+                    full_media_url = f"{base}{full_media_url}"
+                # Use file_name from attachments_data first, then fall back to linked attachment records
+                first_filename = None
+                if attachments_data:
+                    first_filename = attachments_data[0].get('file_name')
+                elif msg.attachments:
+                    first_filename = msg.attachments[0].file_name
+                WhatsAppService.send_media(
+                    recipient=recipient,
+                    media_type=msg.message_type,
+                    media_url=full_media_url,
+                    caption=content if content != f"مرفق: {first_filename}" else None,
+                    filename=first_filename
+                )
+            else:
+                WhatsAppService.send_message(recipient, content)
+        elif conv.platform == 'telegram':
+            TelegramService.send_message(conv.platform_conversation_id, content)
+        elif conv.platform == 'instagram':
+            InstagramService.send_message(conv.platform_conversation_id, content)
+        elif conv.platform == 'tiktok' and TikTokService:
+            TikTokService.send_message(conv.platform_conversation_id, content)
+    except Exception as platform_err:
+        # Log but don't fail the request — message is already saved
+        import traceback
+        print(f"[PLATFORM DISPATCH ERROR] conv={conv_id} platform={conv.platform}: {platform_err}")
+        traceback.print_exc()
 
     # Real-time WebSocket emissions
     SocketService.broadcast_agent_message(msg)
