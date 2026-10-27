@@ -7,6 +7,21 @@ os.environ["DISABLE_SQLALCHEMY_CEXT"] = "1"
 
 load_dotenv()
 
+_IS_PRODUCTION = os.getenv("FLASK_ENV", "").lower() == "production"
+
+
+def _required_secret(name, dev_default):
+    """
+    In production the secret MUST come from the environment (Railway variables).
+    Locally we fall back to a dev default so the app still starts.
+    """
+    value = os.getenv(name)
+    if value:
+        return value
+    if _IS_PRODUCTION:
+        raise RuntimeError(f"Environment variable {name} is required in production")
+    return dev_default
+
 
 class Config:
 
@@ -32,14 +47,15 @@ class Config:
     # =========================
     # General & Security
     # =========================
-    SECRET_KEY = os.getenv(
+    # NOTE: JWT_SECRET_KEY must be at least 32 characters (HS256 recommendation).
+    SECRET_KEY = _required_secret(
         "SECRET_KEY",
-        "nexora-secret-key-super-secure-production-2026"
+        "dev-only-secret-key-change-me-0123456789"
     )
 
-    JWT_SECRET_KEY = os.getenv(
+    JWT_SECRET_KEY = _required_secret(
         "JWT_SECRET_KEY",
-        "nexora-jwt-secret-key-production-2026"
+        "dev-only-jwt-secret-key-change-me-0123456789"
     )
 
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(days=7)
@@ -176,12 +192,19 @@ class Config:
     )
 
     # =========================
-    # Frontend Application URL
+    # Frontend Application URL (Vercel)
     # =========================
     FRONTEND_URL = os.getenv(
         "FRONTEND_URL",
         "http://localhost:5173"
-    )
+    ).rstrip("/")
+
+    # =========================
+    # Backend Public URL (Railway)
+    # Used to build public media links that Meta downloads from.
+    # Must be the BACKEND domain, never the frontend one.
+    # =========================
+    BACKEND_URL = os.getenv("BACKEND_URL", "").rstrip("/")
 
     # =========================
     # Web Push (VAPID) Settings
@@ -190,8 +213,11 @@ class Config:
         "VAPID_PUBLIC_KEY",
         ""
     )
+
     # =========================
     # Storage & Upload Settings
+    # On Railway set STORAGE_DIR=/data/uploads and mount a Volume at /data,
+    # otherwise uploaded files are wiped on every deploy.
     # =========================
     STORAGE_DIR = os.getenv(
         "STORAGE_DIR",
@@ -211,4 +237,4 @@ class Config:
         'mp4', 'webm', 'mov',
         'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv',
         'ai', 'psd', 'eps', 'zip'
-    }
+    }

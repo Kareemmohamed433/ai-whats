@@ -1,3 +1,4 @@
+import traceback
 from datetime import datetime
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -8,12 +9,35 @@ from app.services import SocketService, WhatsAppService, TelegramService, Instag
 
 messages_bp = Blueprint('messages', __name__, url_prefix='/api/messages')
 
+
+def _build_public_media_url(att_record, fallback_url):
+    """
+    Build a public (no-auth) URL that Meta can fetch.
+
+    Always uses BACKEND_URL (the Railway domain). FRONTEND_URL is intentionally
+    NOT used: the files live on the backend, not on Vercel.
+    Prefers /api/attachments/preview/<storage_key>, which has no @jwt_required.
+    """
+    base = (getattr(Config, 'BACKEND_URL', '') or '').rstrip('/')
+    if not base:
+        raise RuntimeError("BACKEND_URL is not configured")
+
+    if att_record and getattr(att_record, 'storage_key', None):
+        return f"{base}/api/attachments/preview/{att_record.storage_key}"
+
+    # Fallback: make absolute if relative
+    url = fallback_url or ''
+    if url.startswith('/'):
+        return f"{base}{url}"
+    return url
+
+
 @messages_bp.route('', methods=['POST'])
 @jwt_required()
 def send_message():
     current_user_id = int(get_jwt_identity())
     data = request.get_json() or {}
-    
+
     conv_id = data.get('conversation_id')
     content = (data.get('content') or '').strip()
     message_type = data.get('message_type', 'text')
@@ -44,9 +68,11 @@ def send_message():
         if not media_url:
             media_url = first_att.get('file_url')
 
+    auto_caption = False
     if not content and attachments_data:
         first_name = attachments_data[0].get('file_name') or 'ملف مرفق'
         content = f"مرفق: {first_name}"
+        auto_caption = True
 
     # Create message model
     msg = Message(
@@ -66,7 +92,7 @@ def send_message():
         conv.ai_status = 'human_handled'
         conv.requires_human = True
         conv.human_handoff_at = datetime.utcnow()
-    
+
     db.session.add(msg)
     db.session.flush()
 
@@ -100,35 +126,13 @@ def send_message():
 
     db.session.commit()
 
-    def _build_public_media_url(att_record, fallback_url):
-        """
-        Build a public (no-auth) URL Meta can fetch.
-        Prefers /api/attachments/preview/<storage_key> which has no @jwt_required.
-        Falls back to the raw file_url if no storage_key exists.
-        """
-        base = (
-            getattr(Config, 'BACKEND_URL', None)
-            or getattr(Config, 'BASE_URL', None)
-            or getattr(Config, 'FRONTEND_URL', None)
-            or ''
-        ).rstrip('/')
-
-        if att_record and att_record.storage_key:
-            return f"{base}/api/attachments/preview/{att_record.storage_key}"
-
-        # fallback: make absolute if relative
-        url = fallback_url or ''
-        if url.startswith('/'):
-            return f"{base}{url}"
-        return url
-
     # Dispatch to platform API channel (Channel Independence)
     customer = conv.customer
     recipient = (customer.phone if customer else None) or conv.platform_conversation_id
     try:
         if conv.platform == 'whatsapp':
             if msg.message_type in ('image', 'video', 'document', 'audio') and msg.media_url:
-                # Resolve the attachment record to get storage_key for public URL
+                # Resolve the attachment record to get storage_key for the public URL
                 att_record = None
                 if msg.attachments:
                     att_record = msg.attachments[0]
@@ -143,13 +147,15 @@ def send_message():
 
                 print(f"[WhatsApp Media Dispatch] type={msg.message_type} url={public_url}")
 
-                WhatsAppService.send_media(
+                result = WhatsAppService.send_media(
                     recipient=recipient,
                     media_type=msg.message_type,
                     media_url=public_url,
-                    caption=content if content != f"مرفق: {first_filename}" else None,
+                    caption=None if auto_caption else content,
                     filename=first_filename
                 )
+                if not result.get("success"):
+                    print(f"[WhatsApp Media FAILED] conv={conv_id}: {result}")
             else:
                 WhatsAppService.send_message(recipient, content)
         elif conv.platform == 'telegram':
@@ -159,7 +165,6 @@ def send_message():
         elif conv.platform == 'tiktok' and TikTokService:
             TikTokService.send_message(conv.platform_conversation_id, content)
     except Exception as platform_err:
-        import traceback
         print(f"[PLATFORM DISPATCH ERROR] conv={conv_id} platform={conv.platform}: {platform_err}")
         traceback.print_exc()
 
@@ -172,6 +177,7 @@ def send_message():
         "success": True,
         "message": msg.to_dict()
     }), 201
+
 
 @messages_bp.route('/note', methods=['POST'])
 @jwt_required()
