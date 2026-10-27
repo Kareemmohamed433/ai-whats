@@ -5,7 +5,7 @@ from app.models import (
     User, Customer, CustomerIdentity, Conversation, Message,
     Product, Category, Order, OrderItem, FAQ, KnowledgeBaseArticle,
     QuickReply, Integration, Tag, CompanySettings, StoreSettings, AISettings,
-    ServicePackage, Lead
+    ServicePackage, ServiceCategory, Lead
 )
 from app.services.ai_tools import NEXORA_PORTFOLIO_URL, NEXORA_PORTFOLIO_PROJECTS
 
@@ -199,7 +199,52 @@ def seed_database():
         pkg.support_period = p_info["support_period"]
         pkg.features = p_info["features"]
 
+    # ==========================================
+    # 4.1 Black and White Creative Service Categories
+    # ==========================================
+    categories_data = [
+        {
+            "slug": "graphic-design",
+            "name": "Graphic Design",
+            "name_ar": "تصميم الجرافيك",
+            "description": "تصميم الهويات البصرية والشعارات، المطبوعات، تصاميم منصات التواصل، والتغليف الإبداعي.",
+            "icon": "palette",
+            "sort_order": 1
+        },
+        {
+            "slug": "advertising-marketing",
+            "name": "Advertising and Marketing",
+            "name_ar": "الدعاية والتسويق",
+            "description": "تخطيط وتصميم الحملات الإعلانية، التسويق عبر وسائل التواصل الاجتماعي، والمواد الدعائية.",
+            "icon": "megaphone",
+            "sort_order": 2
+        },
+        {
+            "slug": "interior-decoration",
+            "name": "Interior Decoration",
+            "name_ar": "الديكور والتصميم الداخلي",
+            "description": "التصميم الداخلي السكني والتجاري، النمذجة ثلاثية الأبعاد 3D والإظهار المعماري وتوزيع المساحات.",
+            "icon": "home",
+            "sort_order": 3
+        }
+    ]
+
+    for cat_data in categories_data:
+        cat = ServiceCategory.query.filter_by(slug=cat_data["slug"]).first()
+        if not cat:
+            cat = ServiceCategory(slug=cat_data["slug"])
+            db.session.add(cat)
+        cat.name = cat_data["name"]
+        cat.name_ar = cat_data["name_ar"]
+        cat.description = cat_data["description"]
+        cat.icon = cat_data["icon"]
+        cat.sort_order = cat_data["sort_order"]
+        cat.is_active = True
+
+    db.session.flush()
+
     # Deactivate any legacy physical products so they are excluded from active queries
+
     old_products = Product.query.filter(
         Product.sku.ilike("KS-%") |
         Product.name.ilike("%زيت%") |

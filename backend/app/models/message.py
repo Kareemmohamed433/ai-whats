@@ -50,17 +50,32 @@ class MessageAttachment(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     message_id = db.Column(db.Integer, db.ForeignKey('messages.id'), nullable=False)
+    conversation_id = db.Column(db.Integer, db.ForeignKey('conversations.id'), nullable=True)
     file_type = db.Column(db.String(50), nullable=False)
     file_url = db.Column(db.String(500), nullable=False)
     file_name = db.Column(db.String(200), nullable=True)
     file_size = db.Column(db.Integer, nullable=True)
+    storage_key = db.Column(db.String(255), nullable=True)
+    mime_type = db.Column(db.String(100), nullable=True)
+    direction = db.Column(db.String(20), default='inbound')
+    provider_media_id = db.Column(db.String(150), nullable=True)
+    status = db.Column(db.String(20), default='completed')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
         return {
             "id": self.id,
             "message_id": self.message_id,
+            "conversation_id": self.conversation_id,
             "file_type": self.file_type,
             "file_url": self.file_url,
             "file_name": self.file_name,
-            "file_size": self.file_size
+            "file_size": self.file_size,
+            "storage_key": self.storage_key,
+            "mime_type": self.mime_type,
+            "direction": self.direction,
+            "provider_media_id": self.provider_media_id,
+            "status": self.status,
+            "created_at": self.created_at.isoformat() if self.created_at else None
         }
+

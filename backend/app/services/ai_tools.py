@@ -3,7 +3,7 @@ import json
 from app.models import (
     Product, Customer, Order, OrderItem, StoreSettings, CompanySettings,
     SupportTicket, Conversation, InternalNote, ConversationAuditLog,
-    PaymentReview, CustomerActivity, ServicePackage, Lead
+    PaymentReview, CustomerActivity, ServicePackage, ServiceCategory, Lead
 )
 from app.extensions import db
 from app.services.socket_service import SocketService
@@ -117,7 +117,7 @@ def search_portfolio(category=None):
 
 
 def get_service_packages():
-    """Retrieve all active NEXORA software service packages."""
+    """Retrieve all active software service packages."""
     packages = ServicePackage.query.filter_by(is_active=True).order_by(ServicePackage.id.asc()).all()
     return [p.to_dict() for p in packages]
 
@@ -128,28 +128,123 @@ def get_service_package(slug):
     return pkg.to_dict() if pkg else None
 
 
+def get_service_categories():
+    """Retrieve all active service categories (Graphic Design, Advertising & Marketing, Interior Decoration)."""
+    categories = ServiceCategory.query.filter_by(is_active=True).order_by(ServiceCategory.sort_order.asc(), ServiceCategory.id.asc()).all()
+    return [c.to_dict(include_services=False) for c in categories]
+
+
+def get_services_by_category(category_identifier):
+    """Retrieve active services for a given category by slug or ID."""
+    if not category_identifier:
+        return []
+    cat = None
+    if str(category_identifier).isdigit():
+        cat = db.session.get(ServiceCategory, int(category_identifier))
+    if not cat:
+        cat = ServiceCategory.query.filter_by(slug=str(category_identifier).lower()).first()
+
+    if cat:
+        services = ServicePackage.query.filter(
+            ServicePackage.is_active == True,
+            (ServicePackage.category_id == cat.id) | (ServicePackage.category_slug == cat.slug)
+        ).order_by(ServicePackage.id.asc()).all()
+    else:
+        services = ServicePackage.query.filter(
+            ServicePackage.is_active == True,
+            ServicePackage.category_slug == str(category_identifier).lower()
+        ).order_by(ServicePackage.id.asc()).all()
+    return [s.to_dict() for s in services]
+
+
+def search_services(query):
+    """Search live active services by title, description, or category."""
+    if not query:
+        return get_service_packages()
+    pattern = f"%{query}%"
+    services = ServicePackage.query.filter(
+        ServicePackage.is_active == True,
+        db.or_(
+            ServicePackage.name.ilike(pattern),
+            ServicePackage.name_ar.ilike(pattern),
+            ServicePackage.description.ilike(pattern),
+            ServicePackage.category_slug.ilike(pattern)
+        )
+    ).order_by(ServicePackage.id.asc()).all()
+    return [s.to_dict() for s in services]
+
+
+def format_service_pricing_text(service):
+    """
+    Format truthful service pricing string strictly obeying business rules:
+    - Never invent prices or discounts.
+    - If fixed price exists: return exact amount and currency.
+    - If starting price exists: state starting price clearly.
+    - If range exists: state range clearly.
+    - If quotation required or missing: state that custom quotation depends on requirements.
+    """
+    if hasattr(service, 'to_dict'):
+        service = service.to_dict()
+    elif isinstance(service, str):
+        service = get_service_package(service)
+    if not service:
+        return "الأسعار بتتحدد حسب متطلبات ونطاق العمل المطلوب بعد دراسة التفاصيل."
+
+    currency = service.get("currency") or "ج.م"
+    pricing_type = service.get("pricing_type")
+
+    if service.get("quotation_required") or pricing_type == 'quotation_required':
+        return "الخدمة بتتطلب عرض سعر مخصص (Custom Quotation) بيعتمد على تفاصيل ومتطلبات مشروعك بدقة."
+
+    if service.get("fixed_price") is not None:
+        return f"السعر المحدد للخدمة هو {service['fixed_price']:,.0f} {currency}."
+
+    if service.get("starting_price") is not None:
+        return f"الأسعار بتبدأ من {service['starting_price']:,.0f} {currency} كحد أدنى، والتكلفة النهائية بتتحدد حسب المتطلبات الإضافية."
+
+    min_p = service.get("indicative_price_min")
+    max_p = service.get("indicative_price_max")
+    if min_p is not None and max_p is not None:
+        return f"السعر التقديري الاسترشادي بيتراوح بين {min_p:,.0f} و {max_p:,.0f} {currency}، والعرض المالي النهائي بيتحدد حسب نطاق العمل."
+    elif min_p is not None:
+        return f"السعر الاسترشادي بيبدأ من {min_p:,.0f} {currency}."
+
+    if service.get("indicative_price_text"):
+        return f"التقدير الاسترشادي: {service['indicative_price_text']}."
+
+    return "الخدمة محتاجة عرض سعر مخصص حسب المتطلبات ونطاق العمل."
+
+
 def get_company_info():
-    """Retrieve NEXORA company information, official contacts, and working hours."""
+    """Retrieve company information, official contacts, and working hours."""
     cs = CompanySettings.query.first()
     if cs:
         return cs.to_dict()
     st = StoreSettings.query.first()
     return st.to_dict() if st else {
-        "company_name": "NEXORA Software Solutions",
-        "tagline": "Ideas → Code → Impact",
+        "company_name": "Black and White",
+        "tagline": "تصميم الجرافيك • الدعاية والتسويق • الديكور والتصميم الداخلي",
         "phone": "+201556441133",
         "whatsapp": "+201556441133",
-        "email": "contact@nexorasolutions.com",
+        "email": "contact@blackandwhite.eg",
         "address": "القاهرة، مصر",
         "portfolio_url": NEXORA_PORTFOLIO_URL
     }
 
 
 def create_lead(customer_id=None, customer_name=None, contact_info=None,
-                business_name=None, industry=None, requested_service='تطوير مواقع وبرمجيات',
+                business_name=None, industry=None, requested_service='طلب خدمة إبداعية',
                 package_interest=None, project_description=None, budget=None,
-                expected_timeline=None, lead_source='direct_chat', conversation_id=None):
-    """Capture and record a qualified client project lead."""
+                expected_timeline=None, lead_source='direct_chat', conversation_id=None,
+                phone=None, notes=None, category=None):
+    """Capture and record a qualified client project lead with deduplication."""
+    if phone and not contact_info:
+        contact_info = phone
+    if notes and not project_description:
+        project_description = notes
+    if category and not package_interest:
+        package_interest = category
+
     if conversation_id and not customer_id:
         conv = db.session.get(Conversation, conversation_id)
         if conv and conv.customer_id:
@@ -164,6 +259,29 @@ def create_lead(customer_id=None, customer_name=None, contact_info=None,
 
     if not contact_info:
         contact_info = "محادثة عميل مباشرة"
+
+    # Deduplication check: check if an identical open lead exists for this customer or contact_info & service
+    filter_cond = None
+    if customer_id:
+        filter_cond = (Lead.customer_id == customer_id)
+    elif contact_info and contact_info != "محادثة عميل مباشرة":
+        filter_cond = (Lead.contact_info == contact_info)
+
+    if filter_cond is not None and requested_service:
+        existing_lead = Lead.query.filter(
+            filter_cond,
+            Lead.requested_service == requested_service,
+            Lead.status.in_(['New', 'Qualified', 'Contacted'])
+        ).first()
+        if existing_lead:
+            if project_description and project_description not in (existing_lead.project_description or ''):
+                existing_lead.project_description = (existing_lead.project_description or '') + " | " + project_description
+            if budget and not existing_lead.budget:
+                existing_lead.budget = budget
+            if expected_timeline and not existing_lead.expected_timeline:
+                existing_lead.expected_timeline = expected_timeline
+            db.session.commit()
+            return {"success": True, "lead": existing_lead.to_dict(), "deduplicated": True}
 
     lead = Lead(
         customer_id=customer_id,
@@ -185,12 +303,13 @@ def create_lead(customer_id=None, customer_name=None, contact_info=None,
         act = CustomerActivity(
             customer_id=customer_id,
             activity_type='new_lead',
-            description=f"تم تسجيل طلب مشروع جديد: {requested_service}"
+            description=f"تم تسجيل طلب خدمة جديد: {requested_service}"
         )
         db.session.add(act)
 
     db.session.commit()
-    return {"success": True, "lead": lead.to_dict()}
+    return {"success": True, "lead": lead.to_dict(), "deduplicated": False}
+
 
 
 def get_customer_profile(customer_id):

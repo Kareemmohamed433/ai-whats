@@ -190,11 +190,25 @@ class Config:
         "VAPID_PUBLIC_KEY",
         ""
     )
-    VAPID_PRIVATE_KEY = os.getenv(
-        "VAPID_PRIVATE_KEY",
-        ""
+    # =========================
+    # Storage & Upload Settings
+    # =========================
+    STORAGE_DIR = os.getenv(
+        "STORAGE_DIR",
+        os.getenv(
+            "UPLOAD_FOLDER",
+            os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..",
+                "storage",
+                "uploads"
+            )
+        )
     )
-    VAPID_CLAIM_EMAIL = os.getenv(
-        "VAPID_CLAIM_EMAIL",
-        "mailto:contact@nexorasolutions.com"
-    )
+    MAX_CONTENT_LENGTH = int(os.getenv("MAX_CONTENT_LENGTH", 25 * 1024 * 1024))
+    ALLOWED_EXTENSIONS = {
+        'jpg', 'jpeg', 'png', 'webp', 'gif', 'svg',
+        'mp4', 'webm', 'mov',
+        'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv',
+        'ai', 'psd', 'eps', 'zip'
+    }

@@ -1,10 +1,11 @@
 from datetime import datetime
 from flask import Blueprint, request, jsonify
-from app.models import Conversation, Customer, CustomerIdentity, Message, CustomerActivity, ConversationAuditLog
+from app.models import Conversation, Customer, CustomerIdentity, Message, MessageAttachment, CustomerActivity, ConversationAuditLog
 from app.extensions import db
 from app.config import Config
-from app.services import AIService, WhatsAppService, TelegramService, InstagramService, SocketService, NotificationService
+from app.services import AIService, WhatsAppService, TelegramService, InstagramService, SocketService, NotificationService, StorageService
 from app.services.messenger_service import MessengerService
+
 
 try:
     from app.services import TikTokService
@@ -102,6 +103,59 @@ def handle_whatsapp_webhook():
                     text = msg_data.get('text', {}).get('body', '')
                     msg_type = msg_data.get('type', 'text')
                     msg_id = msg_data.get('id')
+                    media_url = None
+                    attachment_data = None
+
+                    # Inbound WhatsApp Media processing (images, videos, documents, audio)
+                    if msg_type in ('image', 'video', 'document', 'audio'):
+                        media_obj = msg_data.get(msg_type, {}) or {}
+                        media_id = media_obj.get('id')
+                        caption = media_obj.get('caption', '')
+                        filename = media_obj.get('filename') or f"{msg_type}_{media_id}"
+                        mime = media_obj.get('mime_type')
+
+                        if not text and caption:
+                            text = caption
+                        elif not text:
+                            labels = {'image': 'صورة مرفقة', 'video': 'فيديو مرفق', 'document': 'مستند مرفق', 'audio': 'تسجيل صوتي'}
+                            text = labels.get(msg_type, 'ملف مرفق')
+
+                        if media_id:
+                            download_res = WhatsAppService.retrieve_and_download_media(media_id)
+                            if download_res.get('success') and download_res.get('data_bytes'):
+                                ext_map = {'image': 'jpg', 'video': 'mp4', 'audio': 'ogg', 'document': 'pdf'}
+                                def_ext = ext_map.get(msg_type, 'bin')
+                                safe_fname = filename if '.' in filename else f"{filename}.{def_ext}"
+                                try:
+                                    saved = StorageService.save_bytes(
+                                        download_res['data_bytes'],
+                                        safe_fname,
+                                        mime_type=download_res.get('mime_type') or mime
+                                    )
+                                    media_url = saved['file_url']
+                                    attachment_data = {
+                                        'file_type': msg_type,
+                                        'file_url': saved['file_url'],
+                                        'file_name': safe_fname,
+                                        'file_size': saved['file_size'],
+                                        'storage_key': saved['storage_key'],
+                                        'mime_type': saved['mime_type'],
+                                        'provider_media_id': media_id,
+                                        'status': 'completed'
+                                    }
+                                except Exception as save_err:
+                                    print(f"[Storage error on inbound WhatsApp media]: {save_err}")
+                            else:
+                                attachment_data = {
+                                    'file_type': msg_type,
+                                    'file_url': f"whatsapp://media/{media_id}",
+                                    'file_name': filename,
+                                    'file_size': 0,
+                                    'storage_key': None,
+                                    'mime_type': mime or f"{msg_type}/*",
+                                    'provider_media_id': media_id,
+                                    'status': 'pending'
+                                }
 
                     _process_incoming_message(
                         platform='whatsapp',
@@ -111,8 +165,11 @@ def handle_whatsapp_webhook():
                         username=username,
                         content=text,
                         msg_type=msg_type,
+                        media_url=media_url,
+                        attachment_data=attachment_data,
                         platform_msg_id=msg_id
                     )
+
     except Exception as e:
         print(f"WhatsApp webhook parse error: {e}")
 
@@ -324,7 +381,8 @@ def handle_tiktok_webhook():
     return jsonify({"status": "SUCCESS", "message": "TikTok webhook endpoint active"}), 200
 
 # --- UNIFIED PROCESSING PIPELINE ---
-def _process_incoming_message(platform, platform_user_id, customer_name, phone=None, email=None, username=None, content="", msg_type="text", platform_msg_id=None, media_url=None):
+def _process_incoming_message(platform, platform_user_id, customer_name, phone=None, email=None, username=None, content="", msg_type="text", platform_msg_id=None, media_url=None, attachment_data=None):
+
     from app.services.ai_service import HANDOFF_MESSAGE, AIService
 
     # 1. Identify/Create Customer Identity & Customer (Requirement #3)
@@ -423,7 +481,26 @@ def _process_incoming_message(platform, platform_user_id, customer_name, phone=N
         status='received'
     )
     db.session.add(cust_msg)
+    db.session.flush()
+
+    if attachment_data:
+        att = MessageAttachment(
+            message_id=cust_msg.id,
+            conversation_id=conv.id,
+            file_type=attachment_data.get('file_type', msg_type),
+            file_url=attachment_data.get('file_url', media_url or ''),
+            file_name=attachment_data.get('file_name'),
+            file_size=attachment_data.get('file_size'),
+            storage_key=attachment_data.get('storage_key'),
+            mime_type=attachment_data.get('mime_type'),
+            direction='inbound',
+            provider_media_id=attachment_data.get('provider_media_id'),
+            status=attachment_data.get('status', 'completed')
+        )
+        db.session.add(att)
+
     db.session.commit()
+
 
     # Broadcast to dashboard in real-time
     SocketService.broadcast_new_message(cust_msg)

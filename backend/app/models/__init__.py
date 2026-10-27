@@ -10,13 +10,15 @@ from app.models.order import Order, OrderItem
 from app.models.knowledge import KnowledgeBaseArticle, FAQ
 from app.models.integration import Integration
 from app.models.settings import CompanySettings, StoreSettings, AISettings
-from app.models.service_package import ServicePackage
+from app.models.service_package import ServicePackage, ServiceCategory
 from app.models.lead import Lead
 from app.models.push_subscription import PushSubscription
 from app.models.notification_preference import NotificationPreference
 from app.models.notification_event import NotificationEvent
 
 __all__ = [
+    'ServiceCategory',
+
     'User',
     'Customer',
     'CustomerIdentity',

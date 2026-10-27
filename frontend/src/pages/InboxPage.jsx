@@ -24,7 +24,12 @@ import {
   MessageSquare,
   ShieldCheck,
   Check,
-  CheckCheck
+  CheckCheck,
+  Paperclip,
+  Download,
+  Image as ImageIcon,
+  Film,
+  UploadCloud
 } from 'lucide-react';
 
 // Safe helpers: the backend may return objects where the UI expects strings/arrays
@@ -68,9 +73,16 @@ export default function InboxPage() {
   const [agents, setAgents] = useState([]);
   const [loadingConvs, setLoadingConvs] = useState(true);
   const [sending, setSending] = useState(false);
+  const [pendingAttachments, setPendingAttachments] = useState([]);
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [previewModalUrl, setPreviewModalUrl] = useState(null);
+  const [previewModalName, setPreviewModalName] = useState('');
 
   const messagesEndRef = useRef(null);
   const chatScrollRef = useRef(null);
+  const fileInputRef = useRef(null);
+
 
   // Latest-value refs (avoid stale closures in async callbacks / socket handlers)
   const selectedConvRef = useRef(null);
@@ -241,21 +253,59 @@ export default function InboxPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Send human message
+  // File Attachments Management
+  const handleFileSelect = async (e) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    await uploadFiles(Array.from(files));
+    e.target.value = '';
+  };
+
+  const uploadFiles = async (fileList) => {
+    if (!fileList || fileList.length === 0) return;
+    setUploadingAttachment(true);
+    for (const file of fileList) {
+      const formData = new FormData();
+      formData.append('file', file);
+      if (selectedConv) {
+        formData.append('conversation_id', selectedConv.id);
+      }
+      try {
+        const res = await api.post('/attachments/upload', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
+        if (res && res.success && res.attachment) {
+          setPendingAttachments(prev => [...prev, res.attachment]);
+        }
+      } catch (err) {
+        alert(err.message || `فشل رفع الملف: ${file.name}`);
+      }
+    }
+    setUploadingAttachment(false);
+  };
+
+  const removePendingAttachment = (index) => {
+    setPendingAttachments(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // Send human message (Supports text, attachments, or both)
   const handleSendMessage = (e) => {
     e?.preventDefault();
-    if (!inputText.trim() || !selectedConv || sending) return;
+    if ((!inputText.trim() && pendingAttachments.length === 0) || !selectedConv || sending || uploadingAttachment) return;
 
     const messageText = inputText.trim();
+    const attachmentsToSend = [...pendingAttachments];
     setSending(true);
 
     api.post('/messages', {
       conversation_id: selectedConv.id,
-      content: messageText
+      content: messageText,
+      attachments: attachmentsToSend
     }).then(res => {
       if (res.success) {
         setMessages(prev => (res.message && !prev.some(m => m.id === res.message.id) ? [...prev, res.message] : prev));
         setInputText('');
+        setPendingAttachments([]);
         // Clear saved draft for this conversation
         setDrafts(prev => {
           const copy = { ...prev };
@@ -269,6 +319,7 @@ export default function InboxPage() {
       setSending(false);
     });
   };
+
 
   // Status updates: Human handoff, AI reactivation, Close
   const handleStatusUpdate = (newConvStatus, newAiStatus) => {
@@ -627,11 +678,28 @@ export default function InboxPage() {
             </div>
           )}
 
-          {/* Messages Scroll Area */}
+          {/* Messages Scroll Area with Drag & Drop */}
           <div
             ref={chatScrollRef}
-            className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3.5 bg-slate-50/40 dark:bg-slate-950/40"
+            onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
+            onDragLeave={(e) => { e.preventDefault(); setIsDraggingOver(false); }}
+            onDrop={(e) => {
+              e.preventDefault();
+              setIsDraggingOver(false);
+              if (e.dataTransfer?.files?.length > 0) {
+                uploadFiles(Array.from(e.dataTransfer.files));
+              }
+            }}
+            className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3.5 bg-slate-50/40 dark:bg-slate-950/40 relative"
           >
+            {/* Drag Overlay indicator */}
+            {isDraggingOver && (
+              <div className="absolute inset-0 z-40 bg-blue-600/20 backdrop-blur-xs border-2 border-dashed border-blue-500 rounded-2xl flex flex-col items-center justify-center text-blue-600 dark:text-blue-300 font-bold text-sm pointer-events-none">
+                <UploadCloud className="w-12 h-12 mb-2 animate-bounce" />
+                <span>أفلت الملفات هنا لإرفاقها بالمحادثة</span>
+              </div>
+            )}
+
             {messages.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-slate-400 space-y-2">
                 <MessageSquare className="w-8 h-8 opacity-40 text-blue-500" />
@@ -650,7 +718,7 @@ export default function InboxPage() {
                   >
                     {/* Sender Label */}
                     <div className="flex items-center gap-1.5 mb-1 text-[10px] text-slate-400 px-1 font-medium">
-                      <span>{isCustomer ? (selectedConv.customer?.name || 'العميل') : isAi ? '🤖 NEXORA AI' : `👤 ${m.sender_name || 'موظف الدعم'}`}</span>
+                      <span>{isCustomer ? (selectedConv.customer?.name || 'العميل') : isAi ? '🤖 BLACK & WHITE AI' : `👤 ${m.sender_name || 'موظف الدعم'}`}</span>
                       <span>•</span>
                       <span className="font-mono">{m.created_at ? new Date(m.created_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) : ''}</span>
                     </div>
@@ -665,14 +733,89 @@ export default function InboxPage() {
                         }`}
                       dir="auto"
                     >
-                      {/* Media image if present */}
-                      {m.media_url && (
+                      {/* Attachments rendering */}
+                      {m.attachments && m.attachments.length > 0 && (
+                        <div className="space-y-2 mb-2">
+                          {m.attachments.map(att => {
+                            const isImage = att.file_type === 'image' || att.mime_type?.startsWith('image/');
+                            const isVideo = att.file_type === 'video' || att.mime_type?.startsWith('video/');
+                            const previewUrl = att.file_url || (att.storage_key ? `/api/attachments/preview/${att.storage_key}` : `/api/attachments/${att.id}/preview`);
+                            const downloadUrl = att.storage_key ? `/api/attachments/download/${att.storage_key}` : `/api/attachments/${att.id}/download`;
+
+                            if (isImage) {
+                              return (
+                                <div key={att.id} className="relative group rounded-xl overflow-hidden max-h-60 bg-black/10 border border-black/10">
+                                  <img
+                                    src={previewUrl}
+                                    alt={att.file_name || 'صورة مرفقة'}
+                                    className="w-full h-auto object-cover max-h-60 cursor-pointer hover:scale-[1.02] transition duration-200"
+                                    onClick={() => {
+                                      setPreviewModalUrl(previewUrl);
+                                      setPreviewModalName(att.file_name || 'صورة مرفقة');
+                                    }}
+                                  />
+                                  <div className="absolute top-2 left-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                                    <a
+                                      href={downloadUrl}
+                                      download={att.file_name || 'image'}
+                                      className="p-1.5 bg-black/70 hover:bg-black text-white rounded-lg text-xs flex items-center gap-1"
+                                      title="تحميل الصورة"
+                                      onClick={e => e.stopPropagation()}
+                                    >
+                                      <Download className="w-3.5 h-3.5" />
+                                    </a>
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            if (isVideo) {
+                              return (
+                                <div key={att.id} className="rounded-xl overflow-hidden bg-black/20 max-w-full">
+                                  <video src={previewUrl} controls className="w-full max-h-60 rounded-xl" />
+                                </div>
+                              );
+                            }
+
+                            return (
+                              <div key={att.id} className="flex items-center justify-between p-2.5 bg-black/10 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 gap-3 text-xs">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <div className="p-2 bg-blue-500/20 text-blue-300 rounded-lg shrink-0">
+                                    <FileText className="w-4 h-4" />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <p className="font-semibold truncate max-w-[160px] sm:max-w-xs">{att.file_name || 'مستند مرفق'}</p>
+                                    <p className="text-[10px] opacity-70">
+                                      {att.file_size ? `${(att.file_size / 1024).toFixed(1)} KB` : ''}
+                                    </p>
+                                  </div>
+                                </div>
+                                <a
+                                  href={downloadUrl}
+                                  download={att.file_name || 'document'}
+                                  className="p-1.5 bg-white/20 hover:bg-white/30 rounded-lg text-xs flex items-center gap-1 shrink-0"
+                                  title="تحميل الملف"
+                                >
+                                  <Download className="w-3.5 h-3.5" />
+                                  <span className="hidden sm:inline">تحميل</span>
+                                </a>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Standalone media_url if no attachments array */}
+                      {(!m.attachments || m.attachments.length === 0) && m.media_url && (
                         <div className="mb-2 rounded-xl overflow-hidden max-h-60 bg-black/10">
                           <img
                             src={m.media_url}
                             alt="مرفق"
                             className="w-full h-auto object-cover cursor-pointer hover:scale-105 transition duration-200"
-                            onClick={() => window.open(m.media_url, '_blank')}
+                            onClick={() => {
+                              setPreviewModalUrl(m.media_url);
+                              setPreviewModalName('مرفق');
+                            }}
                           />
                         </div>
                       )}
@@ -696,6 +839,7 @@ export default function InboxPage() {
             )}
             <div ref={messagesEndRef} />
           </div>
+
 
           {/* AI Suggested Replies Chips */}
           {suggestedReplies.length > 0 && (
@@ -738,11 +882,56 @@ export default function InboxPage() {
               </div>
             )}
 
+            {/* Pending Attachments Strip */}
+            {pendingAttachments.length > 0 && (
+              <div className="mb-2 p-2 bg-blue-50/80 dark:bg-blue-950/40 rounded-xl border border-blue-200 dark:border-blue-900/50 flex items-center gap-2 overflow-x-auto">
+                <span className="text-[11px] font-bold text-blue-700 dark:text-blue-300 shrink-0">المرفقات:</span>
+                {pendingAttachments.map((att, idx) => (
+                  <div key={idx} className="flex items-center gap-1.5 px-2.5 py-1 bg-white dark:bg-slate-800 border border-blue-200 dark:border-blue-800 rounded-lg text-xs shrink-0">
+                    <FileText className="w-3.5 h-3.5 text-blue-500" />
+                    <span className="font-medium truncate max-w-[120px]">{att.file_name}</span>
+                    <button
+                      type="button"
+                      onClick={() => removePendingAttachment(idx)}
+                      className="p-0.5 text-slate-400 hover:text-red-500 rounded-full"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Hidden File Input */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileSelect}
+              multiple
+              className="hidden"
+              accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.ai,.psd,.eps,.zip"
+            />
+
             {/* Input & Send Form */}
             <form onSubmit={handleSendMessage} className="flex items-center gap-2">
+              {/* Attachment Picker Button */}
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadingAttachment}
+                title="إرفاق ملف (صور، مستندات، تصاميم، فيديو)"
+                className="p-2.5 sm:p-3 text-slate-500 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition shrink-0"
+              >
+                {uploadingAttachment ? (
+                  <RefreshCw className="w-4 h-4 animate-spin text-blue-500" />
+                ) : (
+                  <Paperclip className="w-4 h-4" />
+                )}
+              </button>
+
               <input
                 type="text"
-                placeholder="اكتب ردك هنا... (اكتب / للردود السريعة)"
+                placeholder="اكتب ردك هنا... (اكتب / للردود السريعة أو أرفق ملفات)"
                 value={inputText}
                 onChange={handleInputChange}
                 // text-base on mobile prevents iOS automatic viewport zoom!
@@ -751,14 +940,19 @@ export default function InboxPage() {
 
               <button
                 type="submit"
-                disabled={sending || !inputText.trim()}
+                disabled={sending || uploadingAttachment || (!inputText.trim() && pendingAttachments.length === 0)}
                 className="px-4 sm:px-5 py-2.5 sm:py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs sm:text-sm font-bold transition flex items-center gap-1.5 shadow-md shadow-blue-600/20 disabled:opacity-50 shrink-0"
               >
-                <Send className="w-4 h-4 rtl:rotate-180" />
+                {sending ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4 rtl:rotate-180" />
+                )}
                 <span className="hidden sm:inline">إرسال</span>
               </button>
             </form>
           </div>
+
 
         </div>
       ) : (
@@ -766,12 +960,13 @@ export default function InboxPage() {
           <div className="w-16 h-16 rounded-2xl bg-blue-50 dark:bg-blue-950/40 flex items-center justify-center text-blue-500">
             <MessageSquare className="w-8 h-8" />
           </div>
-          <h3 className="font-bold text-base text-slate-800 dark:text-slate-200">صندوق محادثات NEXORA</h3>
+          <h3 className="font-bold text-base text-slate-800 dark:text-slate-200">صندوق محادثات Black & White</h3>
           <p className="text-xs max-w-sm text-slate-500 leading-relaxed">
-            اختر محادثة من القائمة للرد على العملاء أو إدارة حالة الذكاء الاصطناعي.
+            اختر محادثة من القائمة للرد على العملاء أو إدارة حالة الذكاء الاصطناعي والمرفقات.
           </p>
         </div>
       )}
+
 
       {/* ======================================================== */}
       {/* 3. CUSTOMER 360 PANEL (Drawer on mobile, column on desktop) */}
@@ -880,6 +1075,46 @@ export default function InboxPage() {
         </>
       )}
 
+      {/* Full-Screen Image Preview Modal */}
+      {previewModalUrl && (
+        <div
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={() => setPreviewModalUrl(null)}
+        >
+          <div
+            className="relative max-w-4xl max-h-[90vh] flex flex-col items-center"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="w-full flex items-center justify-between pb-3 text-white text-xs">
+              <span className="font-bold truncate max-w-md">{previewModalName || 'معاينة المرفق'}</span>
+              <div className="flex items-center gap-2">
+                <a
+                  href={previewModalUrl}
+                  download={previewModalName || 'attachment'}
+                  className="p-2 bg-white/20 hover:bg-white/30 rounded-xl text-white transition flex items-center gap-1.5"
+                  title="تحميل"
+                >
+                  <Download className="w-4 h-4" />
+                  <span className="hidden sm:inline">تحميل</span>
+                </a>
+                <button
+                  onClick={() => setPreviewModalUrl(null)}
+                  className="p-2 bg-white/20 hover:bg-white/30 rounded-xl text-white transition"
+                  title="إغلاق"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <img
+              src={previewModalUrl}
+              alt={previewModalName}
+              className="max-w-full max-h-[80vh] object-contain rounded-2xl shadow-2xl border border-white/10"
+            />
+          </div>
+        </div>
+      )}
+
     </div>
   );
-}
+}

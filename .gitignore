@@ -1,4 +1,4 @@
-﻿.env
+.env
 .env.*
 !.env.example
 !.env.*.example
@@ -25,4 +25,6 @@ Thumbs.db
 
 backend/*.db
 backend/*.db.backup*
+backend/storage/uploads/*
+!backend/storage/uploads/.gitkeep
 

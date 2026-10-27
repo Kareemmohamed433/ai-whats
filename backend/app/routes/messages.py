@@ -1,8 +1,9 @@
 from datetime import datetime
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from app.models import Message, Conversation, InternalNote, User, Customer
+from app.models import Message, MessageAttachment, Conversation, InternalNote, User, Customer
 from app.extensions import db
+from app.config import Config
 from app.services import SocketService, WhatsAppService, TelegramService, InstagramService, TikTokService
 
 messages_bp = Blueprint('messages', __name__, url_prefix='/api/messages')
@@ -14,12 +15,14 @@ def send_message():
     data = request.get_json() or {}
     
     conv_id = data.get('conversation_id')
-    content = data.get('content', '').strip()
+    content = (data.get('content') or '').strip()
     message_type = data.get('message_type', 'text')
     media_url = data.get('media_url')
+    attachments_data = data.get('attachments') or []
+    attachment_ids = data.get('attachment_ids') or []
 
-    if not conv_id or not content:
-        return jsonify({"success": False, "error": {"code": "INVALID_REQUEST", "message": "المحادثة ونص الرسالة مطلوبان."}}), 400
+    if not conv_id or (not content and not media_url and not attachments_data and not attachment_ids):
+        return jsonify({"success": False, "error": {"code": "INVALID_REQUEST", "message": "المحادثة ونص الرسالة أو المرفق مطلوب."}}), 400
 
     conv = Conversation.query.get(conv_id)
     if not conv:
@@ -28,9 +31,22 @@ def send_message():
     user = User.query.get(current_user_id)
     sender_name = user.name if (user and user.name) else "موظف الدعم"
 
-    # Requirement #2: Dynamic template variables replacement
+    # Dynamic template variables replacement
     customer_name = conv.customer.name if (conv.customer and conv.customer.name) else "العميل"
-    content = content.replace("{{agent_name}}", sender_name).replace("{{customer_name}}", customer_name)
+    if content:
+        content = content.replace("{{agent_name}}", sender_name).replace("{{customer_name}}", customer_name)
+
+    # Infer message type from attachments if not explicitly specified
+    if message_type == 'text' and attachments_data:
+        first_att = attachments_data[0]
+        f_type = first_att.get('file_type', 'document')
+        message_type = f_type if f_type in ('image', 'video', 'document', 'audio') else 'document'
+        if not media_url:
+            media_url = first_att.get('file_url')
+
+    if not content and attachments_data:
+        first_name = attachments_data[0].get('file_name') or 'ملف مرفق'
+        content = f"مرفق: {first_name}"
 
     # Create message model
     msg = Message(
@@ -38,34 +54,75 @@ def send_message():
         sender_type='agent',
         sender_id=str(current_user_id),
         sender_name=sender_name,
-        content=content,
+        content=content or "مرفق",
         message_type=message_type,
         media_url=media_url,
         status='sent'
     )
 
     conv.last_message_at = datetime.utcnow()
-    # Requirement #4: Keep ai_status = human_handled when agent replies
+    # Keep ai_status = human_handled when agent replies
     if conv.ai_status == 'active':
         conv.ai_status = 'human_handled'
         conv.requires_human = True
         conv.human_handoff_at = datetime.utcnow()
     
     db.session.add(msg)
+    db.session.flush()
+
+    # Link/create message attachments
+    for att_data in attachments_data:
+        new_att = MessageAttachment(
+            message_id=msg.id,
+            conversation_id=conv.id,
+            file_type=att_data.get('file_type', 'document'),
+            file_url=att_data.get('file_url', ''),
+            file_name=att_data.get('file_name'),
+            file_size=att_data.get('file_size'),
+            storage_key=att_data.get('storage_key'),
+            mime_type=att_data.get('mime_type'),
+            direction='outbound',
+            status='completed'
+        )
+        db.session.add(new_att)
+
+    # If attachment_ids were passed, link them to msg.id
+    for aid in attachment_ids:
+        existing_att = MessageAttachment.query.get(aid)
+        if existing_att and not existing_att.message_id:
+            existing_att.message_id = msg.id
+            existing_att.conversation_id = conv.id
+
     db.session.commit()
 
-    # Dispatch to platform API channel (Requirement #12: Channel Independence)
+    # Dispatch to platform API channel (Channel Independence)
     customer = conv.customer
+    recipient = (customer.phone if customer else None) or conv.platform_conversation_id
     if conv.platform == 'whatsapp':
-        WhatsAppService.send_message(customer.phone or conv.platform_conversation_id, content)
+        if msg.message_type in ('image', 'video', 'document', 'audio') and msg.media_url:
+            # Build full URL if relative
+            full_media_url = msg.media_url
+            if full_media_url.startswith('/'):
+                base = (getattr(Config, 'FRONTEND_URL', None) or '').rstrip('/')
+                full_media_url = f"{base}{full_media_url}"
+            first_filename = attachments_data[0].get('file_name') if attachments_data else None
+            WhatsAppService.send_media(
+                recipient=recipient,
+                media_type=msg.message_type,
+                media_url=full_media_url,
+                caption=content if content != f"مرفق: {first_filename}" else None,
+                filename=first_filename
+            )
+        else:
+            WhatsAppService.send_message(recipient, content)
     elif conv.platform == 'telegram':
         TelegramService.send_message(conv.platform_conversation_id, content)
     elif conv.platform == 'instagram':
         InstagramService.send_message(conv.platform_conversation_id, content)
-    elif conv.platform == 'tiktok':
+    elif conv.platform == 'tiktok' and TikTokService:
         TikTokService.send_message(conv.platform_conversation_id, content)
 
-    # Real-time WebSocket emissions (Requirement #10)
+    # Real-time WebSocket emissions
     SocketService.broadcast_agent_message(msg)
     SocketService.broadcast_new_message(msg)
     SocketService.broadcast_conversation_update(conv)

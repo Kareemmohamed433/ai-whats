@@ -15,6 +15,7 @@ from app.routes.integrations import integrations_bp
 from app.routes.settings import settings_bp
 from app.routes.webhooks import webhooks_bp, telegram_api_bp
 from app.routes.push_notifications import notifications_bp, push_alias_bp
+from app.routes.attachments import attachments_bp
 
 
 def register_routes(app):
@@ -24,6 +25,7 @@ def register_routes(app):
     app.register_blueprint(customers_bp)
     app.register_blueprint(conversations_bp)
     app.register_blueprint(messages_bp)
+    app.register_blueprint(attachments_bp)
     app.register_blueprint(products_bp)
     app.register_blueprint(service_packages_bp)
     app.register_blueprint(leads_bp)
@@ -38,3 +40,4 @@ def register_routes(app):
     app.register_blueprint(telegram_api_bp)
     app.register_blueprint(notifications_bp)
     app.register_blueprint(push_alias_bp)
+
