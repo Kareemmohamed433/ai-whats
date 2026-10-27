@@ -44,9 +44,24 @@ const toText = (v) => {
 function ImageAttachmentPreview({ src, alt, downloadUrl, onClick, className = '' }) {
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const imgRef = useRef(null);
 
   const resolvedSrc = resolveMediaUrl(src);
   const resolvedDownload = resolveMediaUrl(downloadUrl || src);
+
+  // Reset state whenever the image source changes
+  useEffect(() => {
+    setHasError(false);
+    setIsLoading(true);
+  }, [resolvedSrc]);
+
+  // Handle images that finished loading from cache before React attached onLoad
+  useEffect(() => {
+    const el = imgRef.current;
+    if (el && el.complete && el.naturalWidth > 0) {
+      setIsLoading(false);
+    }
+  }, [resolvedSrc]);
 
   if (!resolvedSrc || hasError) {
     return (
@@ -81,11 +96,16 @@ function ImageAttachmentPreview({ src, alt, downloadUrl, onClick, className = ''
           <span>جاري التحميل...</span>
         </div>
       )}
+      {/*
+        FIX: no loading="lazy" and no display:none while loading.
+        A lazy image with display:none is never fetched by the browser,
+        so onLoad never fires and the placeholder stays forever.
+        We hide it visually (absolute + opacity-0) instead.
+      */}
       <img
+        ref={imgRef}
         src={resolvedSrc}
         alt={alt || 'صورة مرفقة'}
-        loading="lazy"
-        crossOrigin="anonymous"
         onLoad={() => setIsLoading(false)}
         onError={() => {
           setIsLoading(false);
@@ -94,9 +114,8 @@ function ImageAttachmentPreview({ src, alt, downloadUrl, onClick, className = ''
         onClick={() => {
           if (onClick) onClick(resolvedSrc, alt);
         }}
-        className={`w-full h-auto object-cover max-h-60 cursor-pointer hover:scale-[1.02] transition duration-200 ${
-          isLoading ? 'hidden' : 'block'
-        } ${className}`}
+        className={`w-full h-auto object-cover max-h-60 cursor-pointer hover:scale-[1.02] transition duration-200 ${isLoading ? 'absolute inset-0 opacity-0 pointer-events-none' : 'block'
+          } ${className}`}
       />
       {!isLoading && resolvedDownload && (
         <div className="absolute top-2 left-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
@@ -502,6 +521,8 @@ export default function InboxPage() {
             <Search className="w-4 h-4 absolute right-3 top-2.5 text-slate-400" />
             <input
               type="text"
+              name="conversation-search"
+              id="conversation-search"
               placeholder="بحث بالاسم، الهاتف، المنصة..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -968,6 +989,8 @@ export default function InboxPage() {
             {/* Hidden File Input */}
             <input
               type="file"
+              name="attachment-file"
+              id="attachment-file"
               ref={fileInputRef}
               onChange={handleFileSelect}
               multiple
@@ -994,6 +1017,8 @@ export default function InboxPage() {
 
               <input
                 type="text"
+                name="message-input"
+                id="message-input"
                 placeholder="اكتب ردك هنا... (اكتب / للردود السريعة أو أرفق ملفات)"
                 value={inputText}
                 onChange={handleInputChange}
@@ -1101,6 +1126,8 @@ export default function InboxPage() {
               <form onSubmit={handleAddNote} className="space-y-2">
                 <input
                   type="text"
+                  name="new-note"
+                  id="new-note"
                   placeholder="إضافة ملاحظة جديدة..."
                   value={newNoteText}
                   onChange={(e) => setNewNoteText(e.target.value)}
@@ -1174,7 +1201,6 @@ export default function InboxPage() {
             <img
               src={resolveMediaUrl(previewModalUrl)}
               alt={previewModalName}
-              crossOrigin="anonymous"
               className="max-w-full max-h-[80vh] object-contain rounded-2xl shadow-2xl border border-white/10"
             />
           </div>
@@ -1183,4 +1209,4 @@ export default function InboxPage() {
 
     </div>
   );
-}
+}
