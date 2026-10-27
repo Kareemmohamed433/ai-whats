@@ -396,3 +396,36 @@ def test_whatsapp_inbound_media_webhook(client, app):
         with app.app_context():
             count = Message.query.filter_by(platform_message_id="wamid.HBgLMjAxMDk5ODg3NzY2FQIAEhgg").count()
             assert count == 1, "Duplicate webhook event must not create duplicate messages"
+
+
+def test_attachment_preview_headers_and_cors(app, client, auth_headers):
+    """
+    Ensure image preview endpoints return 200 OK with correct Content-Type,
+    Access-Control-Allow-Origin: *, and Cache-Control headers without requiring JWT auth
+    (supporting native <img> DOM elements).
+    """
+    dummy_img = io.BytesIO(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00`\x00`\x00\x00\xff\xdb\x00C\x00")
+    dummy_img.name = "sample_photo.jpg"
+
+    upload_res = client.post(
+        "/api/attachments/upload",
+        data={"file": (dummy_img, "sample_photo.jpg")},
+        content_type="multipart/form-data",
+        headers=auth_headers
+    )
+    assert upload_res.status_code == 201
+    att_data = upload_res.get_json()["attachment"]
+    storage_key = att_data["storage_key"]
+
+    # 1. Preview by storage key (without auth header, like browser <img>)
+    preview_res = client.get(f"/api/attachments/preview/{storage_key}")
+    assert preview_res.status_code == 200
+    assert "image/jpeg" in preview_res.headers.get("Content-Type", "")
+    assert preview_res.headers.get("Access-Control-Allow-Origin") == "*"
+    assert "public" in preview_res.headers.get("Cache-Control", "")
+
+    # 2. Download by storage key (without auth header)
+    download_res = client.get(f"/api/attachments/download/{storage_key}")
+    assert download_res.status_code == 200
+    assert download_res.headers.get("Access-Control-Allow-Origin") == "*"
+

@@ -1,4 +1,5 @@
 import os
+import mimetypes
 from flask import Blueprint, request, jsonify, send_file, abort
 from flask_jwt_extended import jwt_required, get_jwt_identity, verify_jwt_in_request
 from app.extensions import db
@@ -89,12 +90,18 @@ def download_attachment_by_id(att_id):
     if not file_path:
         return jsonify({"success": False, "error": {"code": "FILE_NOT_FOUND", "message": "الملف الفعلي غير متوفر على وحدة التخزين."}}), 404
 
-    return send_file(
+    mime = attachment.mime_type
+    if not mime:
+        mime, _ = mimetypes.guess_type(file_path)
+
+    res = send_file(
         file_path,
         as_attachment=True,
         download_name=attachment.file_name or os.path.basename(file_path),
-        mimetype=attachment.mime_type or 'application/octet-stream'
+        mimetype=mime or 'application/octet-stream'
     )
+    res.headers['Access-Control-Allow-Origin'] = '*'
+    return res
 
 
 @attachments_bp.route('/<int:att_id>/preview', methods=['GET'])
@@ -108,11 +115,18 @@ def preview_attachment_by_id(att_id):
     if not file_path:
         return jsonify({"success": False, "error": {"code": "FILE_NOT_FOUND", "message": "الملف الفعلي غير متوفر على وحدة التخزين."}}), 404
 
-    return send_file(
+    mime = attachment.mime_type
+    if not mime:
+        mime, _ = mimetypes.guess_type(file_path)
+
+    res = send_file(
         file_path,
         as_attachment=False,
-        mimetype=attachment.mime_type or 'application/octet-stream'
+        mimetype=mime or 'application/octet-stream'
     )
+    res.headers['Cache-Control'] = 'public, max-age=86400'
+    res.headers['Access-Control-Allow-Origin'] = '*'
+    return res
 
 
 @attachments_bp.route('/preview/<storage_key>', methods=['GET'])
@@ -125,12 +139,17 @@ def preview_by_storage_key(storage_key):
     # Lookup attachment record if exists for proper mime type & name
     att = MessageAttachment.query.filter_by(storage_key=storage_key).first()
     mime = att.mime_type if att and att.mime_type else None
+    if not mime:
+        mime, _ = mimetypes.guess_type(file_path)
 
-    return send_file(
+    res = send_file(
         file_path,
         as_attachment=False,
         mimetype=mime or 'application/octet-stream'
     )
+    res.headers['Cache-Control'] = 'public, max-age=86400'
+    res.headers['Access-Control-Allow-Origin'] = '*'
+    return res
 
 
 @attachments_bp.route('/download/<storage_key>', methods=['GET'])
@@ -142,11 +161,17 @@ def download_by_storage_key(storage_key):
 
     att = MessageAttachment.query.filter_by(storage_key=storage_key).first()
     filename = (att.file_name if att and att.file_name else None) or os.path.basename(file_path)
-    mime = (att.mime_type if att and att.mime_type else None) or 'application/octet-stream'
+    mime = (att.mime_type if att and att.mime_type else None)
+    if not mime:
+        mime, _ = mimetypes.guess_type(file_path)
 
-    return send_file(
+    res = send_file(
         file_path,
         as_attachment=True,
         download_name=filename,
-        mimetype=mime
+        mimetype=mime or 'application/octet-stream'
     )
+    res.headers['Access-Control-Allow-Origin'] = '*'
+    return res
+
+

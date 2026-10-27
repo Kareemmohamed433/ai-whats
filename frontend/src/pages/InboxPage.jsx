@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import api from '../services/api';
+import api, { resolveMediaUrl } from '../services/api';
 import { socket } from '../services/socket';
 import { useAuth } from '../context/AuthContext';
 import { playNotificationChime } from '../services/notificationService';
@@ -40,6 +40,80 @@ const toText = (v) => {
   if (typeof v === 'object') return v.response_text || v.content || v.title || v.name || v.text || '';
   return String(v);
 };
+
+function ImageAttachmentPreview({ src, alt, downloadUrl, onClick, className = '' }) {
+  const [hasError, setHasError] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const resolvedSrc = resolveMediaUrl(src);
+  const resolvedDownload = resolveMediaUrl(downloadUrl || src);
+
+  if (!resolvedSrc || hasError) {
+    return (
+      <div className="flex flex-col items-center justify-center p-3 rounded-xl bg-black/20 dark:bg-white/5 border border-black/10 dark:border-white/10 text-center gap-2 text-xs">
+        <div className="flex items-center gap-1.5 text-amber-300">
+          <ImageIcon className="w-4 h-4 opacity-75 shrink-0" />
+          <span className="font-medium truncate max-w-[180px] sm:max-w-xs">{alt || 'صورة مرفقة'}</span>
+        </div>
+        <p className="text-[11px] opacity-75">تعذر تحميل المعاينة المباشرة</p>
+        {resolvedDownload ? (
+          <a
+            href={resolvedDownload}
+            download={alt || 'image'}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex items-center gap-1.5 px-3 py-1 bg-white/20 hover:bg-white/30 text-white rounded-lg text-xs transition"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>تحميل الصورة</span>
+          </a>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative group rounded-xl overflow-hidden max-h-60 bg-black/10 border border-black/10">
+      {isLoading && (
+        <div className="w-full h-36 bg-black/10 dark:bg-white/5 animate-pulse flex items-center justify-center text-xs opacity-60">
+          <ImageIcon className="w-5 h-5 opacity-40 mr-1 animate-pulse" />
+          <span>جاري التحميل...</span>
+        </div>
+      )}
+      <img
+        src={resolvedSrc}
+        alt={alt || 'صورة مرفقة'}
+        loading="lazy"
+        crossOrigin="anonymous"
+        onLoad={() => setIsLoading(false)}
+        onError={() => {
+          setIsLoading(false);
+          setHasError(true);
+        }}
+        onClick={() => {
+          if (onClick) onClick(resolvedSrc, alt);
+        }}
+        className={`w-full h-auto object-cover max-h-60 cursor-pointer hover:scale-[1.02] transition duration-200 ${
+          isLoading ? 'hidden' : 'block'
+        } ${className}`}
+      />
+      {!isLoading && resolvedDownload && (
+        <div className="absolute top-2 left-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+          <a
+            href={resolvedDownload}
+            download={alt || 'image'}
+            className="p-1.5 bg-black/70 hover:bg-black text-white rounded-lg text-xs flex items-center gap-1"
+            title="تحميل الصورة"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Download className="w-3.5 h-3.5" />
+          </a>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function InboxPage() {
   const { user: currentUser } = useAuth();
@@ -744,35 +818,23 @@ export default function InboxPage() {
 
                             if (isImage) {
                               return (
-                                <div key={att.id} className="relative group rounded-xl overflow-hidden max-h-60 bg-black/10 border border-black/10">
-                                  <img
-                                    src={previewUrl}
-                                    alt={att.file_name || 'صورة مرفقة'}
-                                    className="w-full h-auto object-cover max-h-60 cursor-pointer hover:scale-[1.02] transition duration-200"
-                                    onClick={() => {
-                                      setPreviewModalUrl(previewUrl);
-                                      setPreviewModalName(att.file_name || 'صورة مرفقة');
-                                    }}
-                                  />
-                                  <div className="absolute top-2 left-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
-                                    <a
-                                      href={downloadUrl}
-                                      download={att.file_name || 'image'}
-                                      className="p-1.5 bg-black/70 hover:bg-black text-white rounded-lg text-xs flex items-center gap-1"
-                                      title="تحميل الصورة"
-                                      onClick={e => e.stopPropagation()}
-                                    >
-                                      <Download className="w-3.5 h-3.5" />
-                                    </a>
-                                  </div>
-                                </div>
+                                <ImageAttachmentPreview
+                                  key={att.id}
+                                  src={previewUrl}
+                                  alt={att.file_name || 'صورة مرفقة'}
+                                  downloadUrl={downloadUrl}
+                                  onClick={(resolvedSrc, name) => {
+                                    setPreviewModalUrl(resolvedSrc);
+                                    setPreviewModalName(name || att.file_name || 'صورة مرفقة');
+                                  }}
+                                />
                               );
                             }
 
                             if (isVideo) {
                               return (
                                 <div key={att.id} className="rounded-xl overflow-hidden bg-black/20 max-w-full">
-                                  <video src={previewUrl} controls className="w-full max-h-60 rounded-xl" />
+                                  <video src={resolveMediaUrl(previewUrl)} controls className="w-full max-h-60 rounded-xl" />
                                 </div>
                               );
                             }
@@ -791,8 +853,10 @@ export default function InboxPage() {
                                   </div>
                                 </div>
                                 <a
-                                  href={downloadUrl}
+                                  href={resolveMediaUrl(downloadUrl)}
                                   download={att.file_name || 'document'}
+                                  target="_blank"
+                                  rel="noreferrer"
                                   className="p-1.5 bg-white/20 hover:bg-white/30 rounded-lg text-xs flex items-center gap-1 shrink-0"
                                   title="تحميل الملف"
                                 >
@@ -807,14 +871,13 @@ export default function InboxPage() {
 
                       {/* Standalone media_url if no attachments array */}
                       {(!m.attachments || m.attachments.length === 0) && m.media_url && (
-                        <div className="mb-2 rounded-xl overflow-hidden max-h-60 bg-black/10">
-                          <img
+                        <div className="mb-2">
+                          <ImageAttachmentPreview
                             src={m.media_url}
                             alt="مرفق"
-                            className="w-full h-auto object-cover cursor-pointer hover:scale-105 transition duration-200"
-                            onClick={() => {
-                              setPreviewModalUrl(m.media_url);
-                              setPreviewModalName('مرفق');
+                            onClick={(resolvedSrc, name) => {
+                              setPreviewModalUrl(resolvedSrc);
+                              setPreviewModalName(name || 'مرفق');
                             }}
                           />
                         </div>
@@ -1089,8 +1152,10 @@ export default function InboxPage() {
               <span className="font-bold truncate max-w-md">{previewModalName || 'معاينة المرفق'}</span>
               <div className="flex items-center gap-2">
                 <a
-                  href={previewModalUrl}
+                  href={resolveMediaUrl(previewModalUrl)}
                   download={previewModalName || 'attachment'}
+                  target="_blank"
+                  rel="noreferrer"
                   className="p-2 bg-white/20 hover:bg-white/30 rounded-xl text-white transition flex items-center gap-1.5"
                   title="تحميل"
                 >
@@ -1107,8 +1172,9 @@ export default function InboxPage() {
               </div>
             </div>
             <img
-              src={previewModalUrl}
+              src={resolveMediaUrl(previewModalUrl)}
               alt={previewModalName}
+              crossOrigin="anonymous"
               className="max-w-full max-h-[80vh] object-contain rounded-2xl shadow-2xl border border-white/10"
             />
           </div>

@@ -1,6 +1,42 @@
 
 import axios from 'axios';
 
+/**
+ * Returns the backend base origin (without trailing /api or slash).
+ */
+export const getBackendOrigin = () => {
+  const envUrl = import.meta.env.VITE_API_URL;
+  if (envUrl && typeof envUrl === 'string') {
+    return envUrl.replace(/\/api\/?$/, '').replace(/\/+$/, '');
+  }
+  return '';
+};
+
+/**
+ * Safely resolves an attachment or media URL against the backend origin.
+ * Handles absolute HTTP(S) URLs, relative URLs, data URLs, and filters unsupported schemes.
+ */
+export const resolveMediaUrl = (url) => {
+  if (!url || typeof url !== 'string') return '';
+  const trimmed = url.trim();
+  if (
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('blob:')
+  ) {
+    return trimmed;
+  }
+  // If unsupported non-HTTP protocol like whatsapp://, return empty string so fallback is used
+  if (trimmed.includes('://')) {
+    return '';
+  }
+
+  const origin = getBackendOrigin();
+  const cleanPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return `${origin}${cleanPath}`;
+};
+
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL
     ? `${import.meta.env.VITE_API_URL}/api`
@@ -9,6 +45,7 @@ const api = axios.create({
     'Content-Type': 'application/json'
   }
 });
+
 
 // Request Interceptor: Attach JWT Token
 api.interceptors.request.use(
