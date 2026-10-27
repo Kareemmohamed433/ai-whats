@@ -32,6 +32,52 @@ def _build_public_media_url(att_record, fallback_url):
     return url
 
 
+class _AttRef:
+    """Light stand-in for an attachment record when only request data is available."""
+    def __init__(self, storage_key, file_name):
+        self.storage_key = storage_key
+        self.file_name = file_name
+
+
+def _collect_media_items(msg, attachments_data):
+    """
+    Return ALL media of a message as a list of dicts:
+    {type, file_url, file_name, record}
+    Sources, in order of preference: saved attachment rows -> request payload -> msg.media_url.
+    """
+    valid = ('image', 'video', 'document', 'audio')
+    items = []
+
+    if msg.attachments:
+        for att in sorted(msg.attachments, key=lambda a: a.id or 0):
+            ftype = att.file_type if att.file_type in valid else 'document'
+            items.append({
+                'type': ftype,
+                'file_url': att.file_url,
+                'file_name': att.file_name,
+                'record': att,
+            })
+    elif attachments_data:
+        for a in attachments_data:
+            ftype = a.get('file_type', 'document')
+            ftype = ftype if ftype in valid else 'document'
+            items.append({
+                'type': ftype,
+                'file_url': a.get('file_url'),
+                'file_name': a.get('file_name'),
+                'record': _AttRef(a.get('storage_key'), a.get('file_name')),
+            })
+    elif msg.message_type in valid and msg.media_url:
+        items.append({
+            'type': msg.message_type,
+            'file_url': msg.media_url,
+            'file_name': None,
+            'record': None,
+        })
+
+    return items
+
+
 @messages_bp.route('', methods=['POST'])
 @jwt_required()
 def send_message():
@@ -131,31 +177,26 @@ def send_message():
     recipient = (customer.phone if customer else None) or conv.platform_conversation_id
     try:
         if conv.platform == 'whatsapp':
-            if msg.message_type in ('image', 'video', 'document', 'audio') and msg.media_url:
-                # Resolve the attachment record to get storage_key for the public URL
-                att_record = None
-                if msg.attachments:
-                    att_record = msg.attachments[0]
-                elif attachments_data and attachments_data[0].get('storage_key'):
-                    att_record = type('A', (), {
-                        'storage_key': attachments_data[0].get('storage_key'),
-                        'file_name': attachments_data[0].get('file_name')
-                    })()
+            media_items = _collect_media_items(msg, attachments_data)
+            if media_items:
+                # WhatsApp allows ONE media per message -> send each attachment separately.
+                # The caption (agent text) is attached to the first item only.
+                for idx, item in enumerate(media_items):
+                    public_url = _build_public_media_url(item['record'], item['file_url'])
+                    caption = content if (idx == 0 and not auto_caption) else None
 
-                public_url = _build_public_media_url(att_record, msg.media_url)
-                first_filename = (att_record.file_name if att_record else None) or None
+                    print(f"[WhatsApp Media Dispatch {idx + 1}/{len(media_items)}] "
+                          f"type={item['type']} url={public_url}")
 
-                print(f"[WhatsApp Media Dispatch] type={msg.message_type} url={public_url}")
-
-                result = WhatsAppService.send_media(
-                    recipient=recipient,
-                    media_type=msg.message_type,
-                    media_url=public_url,
-                    caption=None if auto_caption else content,
-                    filename=first_filename
-                )
-                if not result.get("success"):
-                    print(f"[WhatsApp Media FAILED] conv={conv_id}: {result}")
+                    result = WhatsAppService.send_media(
+                        recipient=recipient,
+                        media_type=item['type'],
+                        media_url=public_url,
+                        caption=caption,
+                        filename=item['file_name']
+                    )
+                    if not result.get("success"):
+                        print(f"[WhatsApp Media FAILED] conv={conv_id} item={idx + 1}: {result}")
             else:
                 WhatsAppService.send_message(recipient, content)
         elif conv.platform == 'telegram':

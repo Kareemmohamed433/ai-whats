@@ -41,6 +41,43 @@ const toText = (v) => {
   return String(v);
 };
 
+// Cross-origin safe download.
+// <a download> is IGNORED by browsers when the file lives on another origin
+// (frontend = vercel.app, backend = railway.app) so the browser just opens the file.
+// Fetching it as a blob and saving through an object URL works everywhere.
+// `urls` can be a single URL or a list of URLs to try in order.
+const downloadFile = async (urls, filename = 'attachment') => {
+  const list = (Array.isArray(urls) ? urls : [urls]).filter(Boolean);
+  for (const url of list) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+
+      let name = filename || 'attachment';
+      if (!/\.[a-z0-9]{2,5}$/i.test(name)) {
+        const ext = (blob.type.split('/')[1] || '').split(';')[0].replace('jpeg', 'jpg');
+        if (ext) name += `.${ext}`;
+      }
+
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
+      return true;
+    } catch (err) {
+      console.warn('[downloadFile] failed for', url, err);
+    }
+  }
+  // Last resort: open the first URL in a new tab
+  if (list[0]) window.open(list[0], '_blank', 'noopener');
+  return false;
+};
+
 function ImageAttachmentPreview({ src, alt, downloadUrl, onClick, className = '' }) {
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -75,9 +112,12 @@ function ImageAttachmentPreview({ src, alt, downloadUrl, onClick, className = ''
           <a
             href={resolvedDownload}
             download={alt || 'image'}
-            target="_blank"
             rel="noreferrer"
-            onClick={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              downloadFile([resolvedDownload, resolvedSrc], alt || 'image');
+            }}
             className="inline-flex items-center gap-1.5 px-3 py-1 bg-white/20 hover:bg-white/30 text-white rounded-lg text-xs transition"
           >
             <Download className="w-3.5 h-3.5" />
@@ -124,7 +164,11 @@ function ImageAttachmentPreview({ src, alt, downloadUrl, onClick, className = ''
             download={alt || 'image'}
             className="p-1.5 bg-black/70 hover:bg-black text-white rounded-lg text-xs flex items-center gap-1"
             title="تحميل الصورة"
-            onClick={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              downloadFile([resolvedDownload, resolvedSrc], alt || 'image');
+            }}
           >
             <Download className="w-3.5 h-3.5" />
           </a>
@@ -876,8 +920,15 @@ export default function InboxPage() {
                                 <a
                                   href={resolveMediaUrl(downloadUrl)}
                                   download={att.file_name || 'document'}
-                                  target="_blank"
                                   rel="noreferrer"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    downloadFile(
+                                      [resolveMediaUrl(downloadUrl), resolveMediaUrl(previewUrl)],
+                                      att.file_name || 'document'
+                                    );
+                                  }}
                                   className="p-1.5 bg-white/20 hover:bg-white/30 rounded-lg text-xs flex items-center gap-1 shrink-0"
                                   title="تحميل الملف"
                                 >
@@ -1181,8 +1232,11 @@ export default function InboxPage() {
                 <a
                   href={resolveMediaUrl(previewModalUrl)}
                   download={previewModalName || 'attachment'}
-                  target="_blank"
                   rel="noreferrer"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    downloadFile(resolveMediaUrl(previewModalUrl), previewModalName || 'attachment');
+                  }}
                   className="p-2 bg-white/20 hover:bg-white/30 rounded-xl text-white transition flex items-center gap-1.5"
                   title="تحميل"
                 >
